@@ -1135,6 +1135,9 @@ int ice_clean_rx_irq(struct ice_ring *rx_ring, int budget)
 		hard_start = page_address(rx_buf->page) + rx_buf->page_offset -
 			     offset;
 		xdp_prepare_buff(&xdp, hard_start, offset, size, true);
+
+		if (likely(rx_ring->xdp_metadata_support))
+			ice_xdp_set_meta(&xdp, rx_desc);
 #if (PAGE_SIZE > 4096)
 		/* At larger PAGE_SIZE, frame_sz depend on len size */
 		xdp.frame_sz = ice_rx_frame_truesize(rx_ring, size);

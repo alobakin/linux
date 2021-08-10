@@ -348,6 +348,8 @@ struct ice_vsi {
 	u16 num_xdp_txq;		 /* Used XDP queues */
 	u8 xdp_mapping_mode;		 /* ICE_MAP_MODE_[CONTIG|SCATTER] */
 
+	bool xdp_metadata_support;	 /* true if VSI should support xdp meta */
+
 	/* setup back reference, to which aggregator node this VSI
 	 * corresponds to
 	 */

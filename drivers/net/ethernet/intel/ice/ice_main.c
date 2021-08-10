@@ -2377,6 +2377,7 @@ static int ice_xdp_alloc_setup_rings(struct ice_vsi *vsi)
 		xdp_ring->netdev = NULL;
 		xdp_ring->dev = dev;
 		xdp_ring->count = vsi->num_tx_desc;
+		xdp_ring->xdp_metadata_support = vsi->xdp_metadata_support;
 		WRITE_ONCE(vsi->xdp_rings[i], xdp_ring);
 		if (ice_setup_tx_ring(xdp_ring))
 			goto free_xdp_rings;
@@ -2605,7 +2606,7 @@ static void ice_vsi_rx_napi_schedule(struct ice_vsi *vsi)
  */
 static int
 ice_xdp_setup_prog(struct ice_vsi *vsi, struct bpf_prog *prog,
-		   struct netlink_ext_ack *extack)
+		   struct netlink_ext_ack *extack, u32 flags)
 {
 	int frame_size = vsi->netdev->mtu + ICE_ETH_PKT_HDR_PAD;
 	bool if_running = netif_running(vsi->netdev);
@@ -2624,6 +2625,9 @@ ice_xdp_setup_prog(struct ice_vsi *vsi, struct bpf_prog *prog,
 			return ret;
 		}
 	}
+
+	if (flags & XDP_FLAGS_USE_METADATA)
+		vsi->xdp_metadata_support = true;
 
 	if (!ice_is_xdp_ena_vsi(vsi) && prog) {
 		vsi->num_xdp_txq = vsi->alloc_rxq;
@@ -2678,7 +2682,7 @@ static int ice_xdp(struct net_device *dev, struct netdev_bpf *xdp)
 
 	switch (xdp->command) {
 	case XDP_SETUP_PROG:
-		return ice_xdp_setup_prog(vsi, xdp->prog, xdp->extack);
+		return ice_xdp_setup_prog(vsi, xdp->prog, xdp->extack, xdp->flags);
 	case XDP_SETUP_XSK_POOL:
 		return ice_xsk_pool_setup(vsi, xdp->xsk.pool,
 					  xdp->xsk.queue_id);

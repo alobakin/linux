@@ -270,6 +270,7 @@ struct ice_rx_ring {
 	struct xdp_rxq_info xdp_rxq;
 	/* CL3 - 3rd cacheline starts here */
 	u16 q_index;			/* Queue number of ring */
+	u8 xdp_metadata_support:1;	/* is xdp metadata supported */
 
 	u16 count;			/* Number of descriptors */
 	u16 reg_idx;			/* HW register index of the ring */
@@ -322,6 +323,8 @@ struct ice_tx_ring {
 	u16 reg_idx;			/* HW register index of the ring */
 	u16 count;			/* Number of descriptors */
 	u16 q_index;			/* Queue number of ring */
+	u8 xdp_metadata_support:1;	/* is xdp metadata supported */
+
 	/* stats structs */
 	struct ice_txq_stats tx_stats;
 	/* CL3 - 3rd cacheline starts here */

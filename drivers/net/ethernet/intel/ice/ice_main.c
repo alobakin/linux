@@ -2607,6 +2607,17 @@ static void ice_vsi_assign_bpf_prog(struct ice_vsi *vsi, struct bpf_prog *prog)
 		WRITE_ONCE(vsi->rx_rings[i]->xdp_prog, vsi->xdp_prog);
 }
 
+static void ice_xdp_rings_set_metadata(struct ice_vsi *vsi)
+{
+	int i;
+
+	ice_for_each_rxq(vsi, i)
+		vsi->rx_rings[i]->xdp_metadata_support = vsi->xdp_metadata_support;
+
+	for (i = 0; i < vsi->num_xdp_txq; i++)
+		vsi->xdp_rings[i]->xdp_metadata_support = vsi->xdp_metadata_support;
+}
+
 /**
  * ice_prepare_xdp_rings - Allocate, configure and setup Tx rings for XDP
  * @vsi: VSI to bring up Tx rings used by XDP
@@ -2649,6 +2660,8 @@ int ice_prepare_xdp_rings(struct ice_vsi *vsi, struct bpf_prog *prog)
 
 	if (ice_xdp_alloc_setup_rings(vsi))
 		goto clear_xdp_rings;
+
+	ice_xdp_rings_set_metadata(vsi);
 
 	/* follow the logic from ice_vsi_map_rings_to_vectors */
 	ice_for_each_q_vector(vsi, v_idx) {
@@ -2842,7 +2855,7 @@ int ice_vsi_determine_xdp_res(struct ice_vsi *vsi)
  */
 static int
 ice_xdp_setup_prog(struct ice_vsi *vsi, struct bpf_prog *prog,
-		   struct netlink_ext_ack *extack)
+		   struct netlink_ext_ack *extack, u32 flags)
 {
 	int frame_size = vsi->netdev->mtu + ICE_ETH_PKT_HDR_PAD;
 	bool if_running = netif_running(vsi->netdev);
@@ -2861,6 +2874,9 @@ ice_xdp_setup_prog(struct ice_vsi *vsi, struct bpf_prog *prog,
 			return ret;
 		}
 	}
+
+	if (flags & XDP_FLAGS_USE_METADATA)
+		vsi->xdp_metadata_support = true;
 
 	if (!ice_is_xdp_ena_vsi(vsi) && prog) {
 		xdp_ring_err = ice_vsi_determine_xdp_res(vsi);
@@ -2924,7 +2940,7 @@ static int ice_xdp(struct net_device *dev, struct netdev_bpf *xdp)
 
 	switch (xdp->command) {
 	case XDP_SETUP_PROG:
-		return ice_xdp_setup_prog(vsi, xdp->prog, xdp->extack);
+		return ice_xdp_setup_prog(vsi, xdp->prog, xdp->extack, xdp->flags);
 	case XDP_SETUP_XSK_POOL:
 		return ice_xsk_pool_setup(vsi, xdp->xsk.pool,
 					  xdp->xsk.queue_id);

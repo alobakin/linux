@@ -76,6 +76,24 @@ struct xdp_buff {
 	u32 frame_sz; /* frame size to deduce data_hard_end/reserved tailroom*/
 };
 
+struct xdp_meta_generic {
+	// Tx part
+	u32        flags;
+	u16        free_slot;
+	u16        csum_off;
+	u16        txcvid;
+
+	// Rx part
+	u16        rxcvid;
+	u32        csum;
+	u32        hash;
+	u64        tstamp;
+
+	// BTF ID
+	u32        btf_id;
+} __packed __aligned(8);
+static_assert(sizeof(struct xdp_meta_generic) == 32);
+
 static __always_inline void
 xdp_init_buff(struct xdp_buff *xdp, u32 frame_sz, struct xdp_rxq_info *rxq)
 {

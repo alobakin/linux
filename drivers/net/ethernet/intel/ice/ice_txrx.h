@@ -276,6 +276,7 @@ struct ice_ring {
 	u16 q_handle;			/* Queue handle per TC */
 
 	u8 ring_active:1;		/* is ring online or not */
+	u8 xdp_metadata_support:1;	/* is xdp metadata support */
 
 	u16 count;			/* Number of descriptors */
 	u16 reg_idx;			/* HW register index of the ring */
@@ -301,6 +302,8 @@ struct ice_ring {
 	/* CL3 - 3rd cacheline starts here */
 	struct xdp_rxq_info xdp_rxq;
 	struct sk_buff *skb;
+
+
 	/* CLX - the below items are only accessed infrequently and should be
 	 * in their own cache line if possible
 	 */

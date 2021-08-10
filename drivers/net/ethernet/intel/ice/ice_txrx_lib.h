@@ -46,6 +46,16 @@ static inline void ice_xdp_ring_update_tail(struct ice_ring *xdp_ring)
 	writel_relaxed(xdp_ring->next_to_use, xdp_ring->tail);
 }
 
+static inline void ice_xdp_set_meta(struct xdp_buff *xdp, union ice_32b_rx_flex_desc *desc)
+{
+	struct ice_32b_rx_flex_desc_nic *flex = (struct ice_32b_rx_flex_desc_nic *)desc;
+	struct xdp_meta_generic *md = xdp->data - sizeof(struct xdp_meta_generic);
+
+	xdp->data_meta = md;
+	md->rxcvid = le16_to_cpu(flex->flex_ts.flex.vlan_id);
+	md->hash = le32_to_cpu(flex->rss_hash);
+}
+
 void ice_finalize_xdp_rx(struct ice_ring *rx_ring, unsigned int xdp_res);
 int ice_xmit_xdp_buff(struct xdp_buff *xdp, struct ice_ring *xdp_ring);
 int ice_xmit_xdp_ring(void *data, u16 size, struct ice_ring *xdp_ring);

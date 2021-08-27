@@ -2076,6 +2076,20 @@ config FG_KASLR
 
 	  If unsure, say N.
 
+config FG_KASLR_SHIFT
+	int "FG-KASLR granularity (number of functions per section shift)"
+	depends on FG_KASLR
+	range 0 16
+	default 0
+	help
+	  This sets the number of functions that will be put in each section
+	  as a power of two.
+	  Decreasing the value increases the randomization, but also increases
+	  the size of the final kernel/vmlinux due to the amount of sections.
+	  0 means that a separate section will be created for each function.
+	  16 almost disables the randomization, leaving only the manual
+	  separation.
+
 endmenu		# General setup
 
 source "arch/Kconfig"

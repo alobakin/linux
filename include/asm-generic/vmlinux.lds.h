@@ -131,6 +131,12 @@
 #endif
 
 /*
+ * Used by scripts/generate_text_sections.pl to inject text sections,
+ * harmless if FG-KASLR is disabled.
+ */
+#define TEXT_FG_KASLR		__fg_kaslr_magic = .;
+
+/*
  * GCC 4.5 and later have a 32 bytes section alignment for structures.
  * Except GCC 4.9, that feels the need to align on 64 bytes.
  */

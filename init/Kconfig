@@ -1393,8 +1393,9 @@ config HAVE_ASM_FUNCTION_SECTIONS
 	help
 	  This enables asm function sections if both architecture and
 	  toolchain support it. It allows creating a separate section
-	  for each function written in assembly in order to improve DCE
-	  and LTO (works the same way as -ffunction-sections for C code).
+	  for each function written in assembly in order to improve DCE,
+	  LTO and FG-KASLR (works the same way as -ffunction-sections
+	  for C code).
 
 config HAVE_LD_DEAD_CODE_DATA_ELIMINATION
 	bool
@@ -2060,6 +2061,20 @@ config PROFILING
 #
 config TRACEPOINTS
 	bool
+
+config FG_KASLR
+	bool "Function Granular Kernel Address Space Layout Randomization"
+	depends on ARCH_SUPPORTS_FG_KASLR
+	depends on $(cc-option,-ffunction-sections)
+	depends on LD_HAS_Z_UNIQUE_SYMBOL || !LIVEPATCH
+	help
+	  This option improves the randomness of the kernel text
+	  over basic Kernel Address Space Layout Randomization (KASLR)
+	  by reordering the kernel text at boot time. This feature
+	  uses information generated at compile time to re-layout the
+	  kernel text section at boot time at function level granularity.
+
+	  If unsure, say N.
 
 endmenu		# General setup
 

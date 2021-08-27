@@ -110,6 +110,22 @@ declare_get_random_var_wait(long)
 
 unsigned long randomize_page(unsigned long start, unsigned long range);
 
+/**
+ * shuffle_array - use a Fisher-Yates algorithm to shuffle an array.
+ * @arr: pointer to the array
+ * @nents: the number of elements in the array
+ */
+#define shuffle_array(arr, nents) ({				\
+	typeof(&(arr)[0]) __arr = &(arr)[0];			\
+	size_t __i;						\
+								\
+	for (__i = (nents) - 1; __i > 0; __i--) {		\
+		size_t __j = get_random_long() % (__i + 1);	\
+								\
+		swap(__arr[__i], __arr[__j]);			\
+	}							\
+})
+
 /*
  * This is designed to be standalone for just prandom
  * users, but for now we include it from <linux/random.h>

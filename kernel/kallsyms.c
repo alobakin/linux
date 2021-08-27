@@ -575,13 +575,15 @@ struct kallsym_iter {
 	loff_t pos_mod_end;
 	loff_t pos_ftrace_mod_end;
 	loff_t pos_bpf_end;
+	loff_t pos_end;
 	unsigned long value;
 	unsigned int nameoff; /* If iterating in core kernel symbols. */
 	char type;
 	char name[KSYM_NAME_LEN];
 	char module_name[MODULE_NAME_LEN];
 	int exported;
-	int show_value;
+	int show_layout:1;
+	loff_t shuffled_pos[];
 };
 
 int __weak arch_get_kallsym(unsigned int symnum, unsigned long *value,
@@ -661,11 +663,19 @@ static int get_ksymbol_bpf(struct kallsym_iter *iter)
  */
 static int get_ksymbol_kprobe(struct kallsym_iter *iter)
 {
+	int ret;
+
 	strlcpy(iter->module_name, "__builtin__kprobes", MODULE_NAME_LEN);
 	iter->exported = 0;
-	return kprobe_get_kallsym(iter->pos - iter->pos_bpf_end,
-				  &iter->value, &iter->type,
-				  iter->name) < 0 ? 0 : 1;
+	ret = kprobe_get_kallsym(iter->pos - iter->pos_bpf_end,
+				 &iter->value, &iter->type,
+				 iter->name);
+	if (ret < 0) {
+		iter->pos_end = iter->pos;
+		return 0;
+	}
+
+	return 1;
 }
 
 /* Returns space to next name. */
@@ -688,11 +698,16 @@ static void reset_iter(struct kallsym_iter *iter, loff_t new_pos)
 	iter->name[0] = '\0';
 	iter->nameoff = get_symbol_offset(new_pos);
 	iter->pos = new_pos;
+
+	if (!iter->show_layout)
+		return;
+
 	if (new_pos == 0) {
 		iter->pos_arch_end = 0;
 		iter->pos_mod_end = 0;
 		iter->pos_ftrace_mod_end = 0;
 		iter->pos_bpf_end = 0;
+		iter->pos_end = 0;
 	}
 }
 
@@ -721,13 +736,23 @@ static int update_iter_mod(struct kallsym_iter *iter, loff_t pos)
 	    get_ksymbol_bpf(iter))
 		return 1;
 
-	return get_ksymbol_kprobe(iter);
+	if ((!iter->pos_end || iter->pos_end > pos) &&
+	    get_ksymbol_kprobe(iter))
+		return 1;
+
+	return 0;
 }
 
 /* Returns false if pos at or past end of file. */
 static int update_iter(struct kallsym_iter *iter, loff_t pos)
 {
-	/* Module symbols can be accessed randomly. */
+	if (!iter->show_layout) {
+		if (pos > iter->pos_end)
+			return 0;
+
+		pos = iter->shuffled_pos[pos];
+	}
+
 	if (pos >= kallsyms_num_syms)
 		return update_iter_mod(iter, pos);
 
@@ -770,7 +795,7 @@ static int s_show(struct seq_file *m, void *p)
 	if (!iter->name[0])
 		return 0;
 
-	value = iter->show_value ? (void *)iter->value : NULL;
+	value = iter->show_layout ? (void *)iter->value : NULL;
 
 	if (iter->module_name[0]) {
 		char type;
@@ -807,9 +832,10 @@ static inline int kallsyms_for_perf(void)
 }
 
 /*
- * We show kallsyms information even to normal users if we've enabled
- * kernel profiling and are explicitly not paranoid (so kptr_restrict
- * is clear, and sysctl_perf_event_paranoid isn't set).
+ * We show kallsyms information and display them sorted by address even
+ * to normal users if we've enabled kernel profiling and are explicitly
+ * not paranoid (so kptr_restrict is clear, and sysctl_perf_event_paranoid
+ * isn't set).
  *
  * Otherwise, require CAP_SYSLOG (assuming kptr_restrict isn't set to
  * block even that).
@@ -839,16 +865,53 @@ static int kallsyms_open(struct inode *inode, struct file *file)
 	 * using get_symbol_offset for every symbol.
 	 */
 	struct kallsym_iter *iter;
-	iter = __seq_open_private(file, &kallsyms_op, sizeof(*iter));
-	if (!iter)
-		return -ENOMEM;
-	reset_iter(iter, 0);
+	/*
+	 * This fake iter is needed for the cases with unprivileged
+	 * access. We need to know the exact number of symbols to
+	 * randomize the display layout.
+	 */
+	struct kallsym_iter fake;
+	size_t size = sizeof(*iter);
+	loff_t pos;
+
+	fake.show_layout = true;
+	reset_iter(&fake, 0);
 
 	/*
 	 * Instead of checking this on every s_show() call, cache
 	 * the result here at open time.
 	 */
-	iter->show_value = kallsyms_show_value(file->f_cred);
+	fake.show_layout = kallsyms_show_value(file->f_cred);
+	if (!fake.show_layout) {
+		pos = kallsyms_num_syms;
+		while (update_iter_mod(&fake, pos))
+			pos++;
+
+		size = struct_size(iter, shuffled_pos, fake.pos_end + 1);
+	}
+
+	iter = __seq_open_private(file, &kallsyms_op, size);
+	if (!iter)
+		return -ENOMEM;
+
+	iter->show_layout = fake.show_layout;
+	reset_iter(iter, 0);
+
+	if (iter->show_layout)
+		return 0;
+
+	/* Copy the bounds since they were already discovered above */
+	iter->pos_arch_end = fake.pos_arch_end;
+	iter->pos_mod_end = fake.pos_mod_end;
+	iter->pos_ftrace_mod_end = fake.pos_ftrace_mod_end;
+	iter->pos_bpf_end = fake.pos_bpf_end;
+	iter->pos_end = fake.pos_end;
+
+	for (pos = 0; pos <= iter->pos_end; pos++)
+		iter->shuffled_pos[pos] = pos;
+
+	shuffle_array(iter->shuffled_pos, iter->pos_end + 1);
+
 	return 0;
 }
 
@@ -859,6 +922,7 @@ const char *kdb_walk_kallsyms(loff_t *pos)
 	if (*pos == 0) {
 		memset(&kdb_walk_kallsyms_iter, 0,
 		       sizeof(kdb_walk_kallsyms_iter));
+		kdb_walk_kallsyms_iter.show_layout = true;
 		reset_iter(&kdb_walk_kallsyms_iter, 0);
 	}
 	while (1) {

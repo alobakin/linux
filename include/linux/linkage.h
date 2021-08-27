@@ -81,6 +81,7 @@
 #if defined(CONFIG_HAVE_ASM_FUNCTION_SECTIONS) && \
     ((defined(CONFIG_LD_DEAD_CODE_DATA_ELIMINATION) && !defined(MODULE)) || \
      (defined(CONFIG_FG_KASLR) && !defined(MODULE)) || \
+     (defined(CONFIG_MODULE_FG_KASLR) && defined(MODULE)) || \
      (defined(CONFIG_LTO_CLANG)))
 
 #define SYM_PUSH_SECTION(name)				\

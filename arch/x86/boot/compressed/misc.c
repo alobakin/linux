@@ -207,10 +207,19 @@ static void handle_relocations(void *output, unsigned long output_len,
 	if (IS_ENABLED(CONFIG_X86_64))
 		delta = virt_addr - LOAD_PHYSICAL_ADDR;
 
-	if (!delta) {
+	/*
+	 * it is possible to have delta be zero and still have enabled
+	 * FG-KASLR. We need to perform relocations for it regardless
+	 * of whether the base address has moved.
+	 */
+	if ((cmdline_find_option_bool("nokaslr") ||
+	     !IS_ENABLED(CONFIG_FG_KASLR)) && !delta) {
 		debug_putstr("No relocation needed... ");
 		return;
 	}
+
+	pre_relocations_cleanup(map);
+
 	debug_putstr("Performing relocations... ");
 
 	/*
@@ -234,35 +243,103 @@ static void handle_relocations(void *output, unsigned long output_len,
 	 */
 	for (reloc = output + output_len - sizeof(*reloc); *reloc; reloc--) {
 		long extended = *reloc;
+		long value;
+
+		/*
+		 * if using fgkaslr, we might have moved the address
+		 * of the relocation. Check it to see if it needs adjusting
+		 * from the original address.
+		 */
+		adjust_address(&extended);
+
 		extended += map;
 
 		ptr = (unsigned long)extended;
 		if (ptr < min_addr || ptr > max_addr)
 			error("32-bit relocation outside of kernel!\n");
 
-		*(uint32_t *)ptr += delta;
+		value = *(s32 *)ptr;
+
+		/*
+		 * If using FG-KASLR, the value of the relocation
+		 * might need to be changed because it referred
+		 * to an address that has moved.
+		 */
+		adjust_address(&value);
+
+		value += delta;
+		*(u32 *)ptr = value;
 	}
 #ifdef CONFIG_X86_64
 	while (*--reloc) {
 		long extended = *reloc;
+		long oldvalue, value;
+		Elf64_Shdr *s;
+
+		/*
+		 * if using FG-KASLR, we might have moved the address of
+		 * the relocation. Check it to see if it needs adjusting
+		 * from the original address.
+		 */
+		s = adjust_address(&extended);
+
 		extended += map;
 
 		ptr = (unsigned long)extended;
 		if (ptr < min_addr || ptr > max_addr)
 			error("inverse 32-bit relocation outside of kernel!\n");
 
-		*(int32_t *)ptr -= delta;
+		value = *(s32 *)ptr;
+		oldvalue = value;
+
+		/*
+		 * If using fgkaslr, these relocs will contain
+		 * relative offsets which might need to be
+		 * changed because it referred
+		 * to an address that has moved.
+		 */
+		adjust_relative_offset(*reloc, &value, s);
+
+		/*
+		 * only percpu symbols need to have their values adjusted for
+		 * base address KASLR since relative offsets within the .text
+		 * and .text.* sections are ok wrt each other.
+		 */
+		if (is_percpu_addr(*reloc, oldvalue))
+			value -= delta;
+
+		*(s32 *)ptr = value;
 	}
 	for (reloc--; *reloc; reloc--) {
 		long extended = *reloc;
+		long value;
+
+		/*
+		 * if using FG-KASLR, we might have moved the address of the
+		 * relocation. Check it to see if it needs adjusting from the
+		 * original address.
+		 */
+		adjust_address(&extended);
+
 		extended += map;
 
 		ptr = (unsigned long)extended;
 		if (ptr < min_addr || ptr > max_addr)
 			error("64-bit relocation outside of kernel!\n");
 
-		*(uint64_t *)ptr += delta;
+		value = *(s64 *)ptr;
+
+		/*
+		 * If using fgkaslr, the value of the relocation
+		 * might need to be changed because it referred
+		 * to an address that has moved.
+		 */
+		adjust_address(&value);
+
+		value += delta;
+		*(u64 *)ptr = value;
 	}
+	post_relocations_cleanup(map);
 #endif
 }
 #else
@@ -271,37 +348,13 @@ static inline void handle_relocations(void *output, unsigned long output_len,
 { }
 #endif
 
-static void parse_elf(void *output)
+static void layout_image(void *output, Elf_Ehdr *ehdr, Elf_Phdr *phdrs)
 {
-#ifdef CONFIG_X86_64
-	Elf64_Ehdr ehdr;
-	Elf64_Phdr *phdrs, *phdr;
-#else
-	Elf32_Ehdr ehdr;
-	Elf32_Phdr *phdrs, *phdr;
-#endif
-	void *dest;
-	int i;
+	u32 i;
 
-	memcpy(&ehdr, output, sizeof(ehdr));
-	if (ehdr.e_ident[EI_MAG0] != ELFMAG0 ||
-	   ehdr.e_ident[EI_MAG1] != ELFMAG1 ||
-	   ehdr.e_ident[EI_MAG2] != ELFMAG2 ||
-	   ehdr.e_ident[EI_MAG3] != ELFMAG3) {
-		error("Kernel is not a valid ELF file");
-		return;
-	}
-
-	debug_putstr("Parsing ELF... ");
-
-	phdrs = malloc(sizeof(*phdrs) * ehdr.e_phnum);
-	if (!phdrs)
-		error("Failed to allocate space for phdrs");
-
-	memcpy(phdrs, output + ehdr.e_phoff, sizeof(*phdrs) * ehdr.e_phnum);
-
-	for (i = 0; i < ehdr.e_phnum; i++) {
-		phdr = &phdrs[i];
+	for (i = 0; i < ehdr->e_phnum; i++) {
+		const Elf_Phdr *phdr = &phdrs[i];
+		void *dest;
 
 		switch (phdr->p_type) {
 		case PT_LOAD:
@@ -317,9 +370,52 @@ static void parse_elf(void *output)
 #endif
 			memmove(dest, output + phdr->p_offset, phdr->p_filesz);
 			break;
-		default: /* Ignore other PT_* */ break;
+		default: /* Ignore other PT_* */
+			break;
 		}
 	}
+}
+
+static void parse_elf(void *output)
+{
+#ifdef CONFIG_X86_64
+	Elf64_Ehdr ehdr;
+	Elf64_Phdr *phdrs, *phdr;
+#else
+	Elf32_Ehdr ehdr;
+	Elf32_Phdr *phdrs, *phdr;
+#endif
+	int nokaslr;
+	void *dest;
+	int i;
+
+	memcpy(&ehdr, output, sizeof(ehdr));
+	if (ehdr.e_ident[EI_MAG0] != ELFMAG0 ||
+	   ehdr.e_ident[EI_MAG1] != ELFMAG1 ||
+	   ehdr.e_ident[EI_MAG2] != ELFMAG2 ||
+	   ehdr.e_ident[EI_MAG3] != ELFMAG3) {
+		error("Kernel is not a valid ELF file");
+		return;
+	}
+
+	if (IS_ENABLED(CONFIG_FG_KASLR)) {
+		nokaslr = cmdline_find_option_bool("nokaslr");
+		if (nokaslr)
+			warn("FG_KASLR disabled: 'nokaslr' on cmdline.");
+	}
+
+	debug_putstr("Parsing ELF... ");
+
+	phdrs = malloc(sizeof(*phdrs) * ehdr.e_phnum);
+	if (!phdrs)
+		error("Failed to allocate space for phdrs");
+
+	memcpy(phdrs, output + ehdr.e_phoff, sizeof(*phdrs) * ehdr.e_phnum);
+
+	if (IS_ENABLED(CONFIG_FG_KASLR) && !nokaslr)
+		layout_randomized_image(output, &ehdr, phdrs);
+	else
+		layout_image(output, &ehdr, phdrs);
 
 	free(phdrs);
 }

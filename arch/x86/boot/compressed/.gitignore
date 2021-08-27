@@ -3,5 +3,6 @@ relocs
 vmlinux.bin.all
 vmlinux.relocs
 vmlinux.lds
+vmlinux.symbols
 mkpiggy
 piggy.S

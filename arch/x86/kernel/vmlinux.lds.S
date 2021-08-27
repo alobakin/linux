@@ -303,7 +303,9 @@ SECTIONS
 	 * get the address and the length of them to patch the kernel safely.
 	 */
 	.altinstr_replacement : AT(ADDR(.altinstr_replacement) - LOAD_OFFSET) {
+		__altinstr_replacement = .;
 		*(.altinstr_replacement)
+		__altinstr_replacement_end = .;
 	}
 
 	/*

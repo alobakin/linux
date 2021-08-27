@@ -93,6 +93,7 @@ vmlinux-objs-y := $(obj)/vmlinux.lds $(obj)/kernel_info.o $(obj)/head_$(BITS).o 
 
 vmlinux-objs-$(CONFIG_EARLY_PRINTK) += $(obj)/early_serial_console.o
 vmlinux-objs-$(CONFIG_RANDOMIZE_BASE) += $(obj)/kaslr.o
+vmlinux-objs-$(CONFIG_FG_KASLR) += $(obj)/fgkaslr.o $(obj)/utils.o
 ifdef CONFIG_X86_64
 	vmlinux-objs-y += $(obj)/ident_map_64.o
 	vmlinux-objs-y += $(obj)/idt_64.o $(obj)/idt_handlers_64.o
@@ -111,11 +112,21 @@ $(obj)/vmlinux: $(vmlinux-objs-y) $(efi-obj-y) FORCE
 
 OBJCOPYFLAGS_vmlinux.bin :=  -R .comment -S
 
-ifdef CONFIG_FG_KASLR
-RELOCS_ARGS += --fg-kaslr
-endif
+targets += vmlinux.symbols
 
-$(obj)/vmlinux.bin: vmlinux FORCE
+ifdef CONFIG_FG_KASLR
+quiet_cmd_vmlinux_symbols = GEN     $@
+      cmd_vmlinux_symbols = $(CPP) $(cpp_flags) -P -D"GEN(s)"=s -o $@ $<
+
+VMLINUX_SYMBOLS = $(obj)/vmlinux.symbols
+$(VMLINUX_SYMBOLS): $(src)/gen-symbols.h FORCE
+	$(call if_changed_dep,vmlinux_symbols)
+
+OBJCOPYFLAGS += --keep-symbols=$(VMLINUX_SYMBOLS)
+RELOCS_ARGS += --fg-kaslr
+endif # CONFIG_FG_KASLR
+
+$(obj)/vmlinux.bin: vmlinux $(VMLINUX_SYMBOLS) FORCE
 	$(call if_changed,objcopy)
 
 targets += $(patsubst $(obj)/%,%,$(vmlinux-objs-y)) vmlinux.bin.all vmlinux.relocs

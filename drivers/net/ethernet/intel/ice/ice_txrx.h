@@ -302,6 +302,7 @@ struct ice_ring {
 	/* CL3 - 3rd cacheline starts here */
 	struct xdp_rxq_info xdp_rxq;
 	struct sk_buff *skb;
+	s32 btf_id;
 
 
 	/* CLX - the below items are only accessed infrequently and should be

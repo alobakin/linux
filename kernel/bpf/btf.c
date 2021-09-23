@@ -6152,6 +6152,43 @@ struct module *btf_try_get_module(const struct btf *btf)
 	return res;
 }
 
+struct btf *btf_get_from_module(const struct module *module)
+{
+	struct btf *res = NULL;
+#ifdef CONFIG_DEBUG_INFO_BTF_MODULES
+	struct btf_module *btf_mod, *tmp;
+
+	mutex_lock(&btf_module_mutex);
+	list_for_each_entry_safe(btf_mod, tmp, &btf_modules, list) {
+		if (btf_mod->module != module)
+			continue;
+
+		res = btf_mod->btf;
+
+		break;
+	}
+	mutex_unlock(&btf_module_mutex);
+#endif
+
+	return res;
+}
+
+s32 btf_get_type_id(const struct module *mod, char *name, u32 kind)
+{
+	struct btf *btf;
+
+	if (mod)
+		btf = btf_get_from_module(mod);
+	else
+		btf = bpf_get_btf_vmlinux();
+
+	if (!btf)
+		return 0;
+
+	return btf_find_by_name_kind(btf, name, kind);
+}
+EXPORT_SYMBOL_GPL(btf_get_type_id);
+
 BPF_CALL_4(bpf_btf_find_by_name_kind, char *, name, int, name_sz, u32, kind, int, flags)
 {
 	struct btf *btf;

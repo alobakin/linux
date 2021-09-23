@@ -2423,11 +2423,15 @@ static void ice_xdp_rings_set_metadata(struct ice_vsi *vsi)
 {
 	int i;
 
-	ice_for_each_rxq(vsi, i)
+	ice_for_each_rxq(vsi, i) {
 		vsi->rx_rings[i]->xdp_metadata_support = vsi->xdp_metadata_support;
+		vsi->rx_rings[i]->btf_id = vsi->btf_id;
+	}
 
-	for (i = 0; i < vsi->num_xdp_txq; i++)
+	for (i = 0; i < vsi->num_xdp_txq; i++) {
 		vsi->xdp_rings[i]->xdp_metadata_support = vsi->xdp_metadata_support;
+		vsi->xdp_rings[i]->btf_id = vsi->btf_id;
+	}
 }
 
 /**
@@ -2646,8 +2650,10 @@ ice_xdp_setup_prog(struct ice_vsi *vsi, struct bpf_prog *prog,
 		}
 	}
 
-	if (flags & XDP_FLAGS_USE_METADATA)
+	if (flags & XDP_FLAGS_USE_METADATA) {
 		vsi->xdp_metadata_support = true;
+		vsi->btf_id = btf_get_type_id(THIS_MODULE, "xdp_meta_generic", BTF_KIND_STRUCT);
+	}	
 
 	if (!ice_is_xdp_ena_vsi(vsi) && prog) {
 		vsi->num_xdp_txq = vsi->alloc_rxq;

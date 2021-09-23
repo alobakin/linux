@@ -38,6 +38,7 @@
 #include <linux/avf/virtchnl.h>
 #include <linux/cpu_rmap.h>
 #include <linux/dim.h>
+#include <linux/btf.h>
 #include <net/devlink.h>
 #include <net/ipv6.h>
 #include <net/xdp_sock.h>
@@ -350,6 +351,7 @@ struct ice_vsi {
 	u8 xdp_mapping_mode;		 /* ICE_MAP_MODE_[CONTIG|SCATTER] */
 
 	bool xdp_metadata_support;	 /* true if VSI should support xdp meta */
+	s32 btf_id;
 
 	/* setup back reference, to which aggregator node this VSI
 	 * corresponds to

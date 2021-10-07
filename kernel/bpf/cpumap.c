@@ -215,6 +215,7 @@ static int cpu_map_bpf_prog_run_xdp(struct bpf_cpu_map_entry *rcpu,
 {
 	struct xdp_rxq_info rxq;
 	struct xdp_buff xdp;
+	volatile struct xdp_meta_generic xdp_meta_generic;
 	int i, nframes = 0;
 
 	xdp_set_return_frame_no_direct();

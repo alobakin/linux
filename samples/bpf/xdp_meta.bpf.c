@@ -8,16 +8,10 @@
 #include <bpf/bpf_core_read.h>
 #include <bpf/bpf_helpers.h>
 
-struct xdp_meta_generic___minimal {
-	u32 btf_id;
-	u16 rxcvid;
-	u32 hash;
-};
-
 SEC("xdp")
 int xdp_meta_prog(struct xdp_md *ctx)
 {
-	struct xdp_meta_generic___minimal *data_meta =
+	struct xdp_meta_generic *data_meta =
 		(void *)(long)ctx->data_meta;
 	void *data_end = (void *)(long)ctx->data_end;
 	void *data = (void *)(long)ctx->data;
@@ -25,7 +19,8 @@ int xdp_meta_prog(struct xdp_md *ctx)
 	u64 nh_off;
 	u32 btf_id_libbpf;
 	u32 btf_id_meta;
-	s32 err;
+	u16 rxcvid;
+	u32 hash;
 	long *value;
 
 	nh_off = sizeof(*eth);
@@ -36,18 +31,21 @@ int xdp_meta_prog(struct xdp_md *ctx)
 	if (data_meta + 1 > data)
 		return XDP_DROP;
 
-	btf_id_libbpf = bpf_core_type_id_kernel(struct xdp_meta_generic___minimal);
-	err = bpf_probe_read_kernel(&btf_id_meta, sizeof(btf_id_meta), (void*)data - 4);
-
-	/* Probably should not be in the final version */
-	if (err){
-		bpf_printk("id from libbpf %d, could not obtain id from hints metadata, error is %d\n",
-			   btf_id_libbpf, err);
-		return XDP_DROP;
-	}
+	btf_id_libbpf = bpf_core_type_id_kernel(struct xdp_meta_generic);
+	bpf_probe_read_kernel(&btf_id_meta, sizeof(btf_id_meta), (void*)data - 4);
 
 	bpf_printk("id from libbpf %d, id from hints metadata %d\n",
 		   btf_id_libbpf, btf_id_meta);
+
+	if (btf_id_libbpf == btf_id_meta)
+		bpf_printk("Received meta is generic\n");
+	else
+		bpf_printk("Received meta type is unknown\n");
+
+	
+	hash = BPF_CORE_READ(data_meta, hash);
+	rxcvid = BPF_CORE_READ(data_meta, rxcvid);
+	bpf_printk("Metadata. Hash: 0x%x, VID: %d\n", hash, rxcvid);
 
 	return XDP_PASS;
 }

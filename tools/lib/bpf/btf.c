@@ -430,6 +430,20 @@ const struct btf *btf__base_btf(const struct btf *btf)
 	return btf->base_btf;
 }
 
+__u32 btf__obj_id(const struct btf *btf)
+{
+	struct bpf_btf_info btf_info;
+	unsigned int len = sizeof(btf_info);
+	int err = 0;
+	int fd = btf__fd(btf);
+
+	memset(&btf_info, 0, sizeof(btf_info));
+	err = bpf_obj_get_info_by_fd(fd, &btf_info, &len);
+
+	if (err) return 0;
+	return btf_info.id;
+}
+
 /* internal helper returning non-const pointer to a type */
 struct btf_type *btf_type_by_id(struct btf *btf, __u32 type_id)
 {
@@ -1379,6 +1393,7 @@ struct btf *btf_get_from_fd(int btf_fd, struct btf *base_btf)
 
 exit_free:
 	free(ptr);
+	btf->fd = btf_fd;
 	return btf;
 }
 

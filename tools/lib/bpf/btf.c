@@ -430,12 +430,27 @@ const struct btf *btf__base_btf(const struct btf *btf)
 	return btf->base_btf;
 }
 
-__u32 btf__obj_id(const struct btf *btf)
+static __u32 btf_get_vmlinux_obj_id(void)
+{
+	struct bpf_btf_info btf_info;
+	unsigned int len = sizeof(btf_info);
+	int err = 0;
+
+	memset(&btf_info, 0, sizeof(btf_info));
+	err = bpf_get_vmlinux_btf_info(&btf_info, &len);
+
+	if (err) return 0;
+	return btf_info.id;
+}
+
+__u32 btf_obj_id(const struct btf *btf)
 {
 	struct bpf_btf_info btf_info;
 	unsigned int len = sizeof(btf_info);
 	int err = 0;
 	int fd = btf__fd(btf);
+
+	if (btf->base_btf == NULL) return btf_get_vmlinux_obj_id();
 
 	memset(&btf_info, 0, sizeof(btf_info));
 	err = bpf_obj_get_info_by_fd(fd, &btf_info, &len);
@@ -1390,10 +1405,10 @@ struct btf *btf_get_from_fd(int btf_fd, struct btf *base_btf)
 	}
 
 	btf = btf_new(ptr, btf_info.btf_size, base_btf);
+	btf->fd = btf_fd;
 
 exit_free:
 	free(ptr);
-	btf->fd = btf_fd;
 	return btf;
 }
 

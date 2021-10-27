@@ -287,6 +287,8 @@ int bpf_object__variable_offset(const struct bpf_object *obj, const char *name,
 struct btf *btf_get_from_fd(int btf_fd, struct btf *base_btf);
 void btf_get_kernel_prefix_kind(enum bpf_attach_type attach_type,
 				const char **prefix, int *kind);
+__u32 btf_obj_id(const struct btf *btf);
+int bpf_get_vmlinux_btf_info(void *info, __u32 *info_len);
 
 struct btf_ext_info {
 	/*

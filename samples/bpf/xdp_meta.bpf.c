@@ -8,6 +8,16 @@
 #include <bpf/bpf_core_read.h>
 #include <bpf/bpf_helpers.h>
 
+struct ice_ring___min {
+        struct ice_ring *next;
+        void *desc;
+        struct device *dev;
+        struct net_device *netdev;
+        struct ice_vsi *vsi;
+        struct ice_q_vector *q_vector;
+        u8 *tail;
+} __attribute__((preserve_access_index));
+
 SEC("xdp")
 int xdp_meta_prog(struct xdp_md *ctx)
 {
@@ -17,8 +27,9 @@ int xdp_meta_prog(struct xdp_md *ctx)
 	void *data = (void *)(long)ctx->data;
 	struct ethhdr *eth = data;
 	u64 nh_off;
-	u32 btf_id_libbpf;
+	u64 btf_id_libbpf;
 	u32 btf_id_meta;
+	u64 btf_id_ring;
 	u16 rxcvid;
 	u32 hash;
 	long *value;
@@ -34,8 +45,12 @@ int xdp_meta_prog(struct xdp_md *ctx)
 	btf_id_libbpf = bpf_core_type_id_kernel(struct xdp_meta_generic);
 	bpf_probe_read_kernel(&btf_id_meta, sizeof(btf_id_meta), (void*)data - 4);
 
-	bpf_printk("id from libbpf %d, id from hints metadata %d\n",
-		   btf_id_libbpf, btf_id_meta);
+	bpf_printk("id from libbpf %u (module BTF id: %u), id from hints metadata %u\n",
+		   btf_id_libbpf & 0xFFFFFFFF, btf_id_libbpf >> 32, btf_id_meta);
+
+	btf_id_ring = bpf_core_type_id_kernel(struct ice_ring___min);
+	bpf_printk("ring type id %u, ice BTF id %u\n",
+		   btf_id_ring & 0xFFFFFFFF, btf_id_ring >> 32);
 
 	if (btf_id_libbpf == btf_id_meta)
 		bpf_printk("Received meta is generic\n");

@@ -840,7 +840,7 @@ static int bpf_core_calc_relo(const char *prog_name,
 		err = bpf_core_calc_type_relo(relo, local_spec, &res->orig_val);
 		err = err ?: bpf_core_calc_type_relo(relo, targ_spec, &res->new_val);
 		if (!err && relo->kind == BPF_TYPE_ID_TARGET)
-			res->btf_obj_id = btf__obj_id(targ_spec->btf);
+			res->btf_obj_id = btf_obj_id(targ_spec->btf);
 	} else if (core_relo_is_enumval_based(relo->kind)) {
 		err = bpf_core_calc_enumval_relo(relo, local_spec, &res->orig_val);
 		err = err ?: bpf_core_calc_enumval_relo(relo, targ_spec, &res->new_val);

@@ -1017,6 +1017,23 @@ retry:
 	return libbpf_err_errno(fd);
 }
 
+int bpf_get_vmlinux_btf_info(void *info, __u32 *info_len)
+{
+	union bpf_attr attr;
+	int err;
+
+	memset(&attr, 0, sizeof(attr));
+	attr.info.info_len = *info_len;
+	attr.info.info = ptr_to_u64(info);
+
+	err = sys_bpf(BPF_BTF_VMLINUX_INFO, &attr, sizeof(attr));
+
+	if (!err)
+		*info_len = attr.info.info_len;
+
+	return libbpf_err_errno(err);
+}
+
 int bpf_task_fd_query(int pid, int fd, __u32 flags, char *buf, __u32 *buf_len,
 		      __u32 *prog_id, __u32 *fd_type, __u64 *probe_offset,
 		      __u64 *probe_addr)

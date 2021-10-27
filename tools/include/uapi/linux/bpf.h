@@ -873,6 +873,7 @@ enum bpf_cmd {
 	BPF_ITER_CREATE,
 	BPF_LINK_DETACH,
 	BPF_PROG_BIND_MAP,
+	BPF_BTF_VMLINUX_INFO,
 };
 
 enum bpf_map_type {

@@ -873,6 +873,7 @@ enum bpf_cmd {
 	BPF_ITER_CREATE,
 	BPF_LINK_DETACH,
 	BPF_PROG_BIND_MAP,
+	BPF_BTF_VMLINUX_INFO,
 };
 
 enum bpf_map_type {
@@ -1395,6 +1396,11 @@ union bpf_attr {
 		__u32		info_len;
 		__aligned_u64	info;
 	} info;
+
+	struct { /* anonymous struct used by BPF_BTF_VMLINUX_INFO */
+		__u32 info_len;
+		__aligned_u64 info;
+	} info_vmlinux;
 
 	struct { /* anonymous struct used by BPF_PROG_QUERY command */
 		__u32		target_fd;	/* container object to query */

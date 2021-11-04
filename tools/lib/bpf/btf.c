@@ -119,6 +119,8 @@ struct btf {
 	/* BTF object FD, if loaded into kernel */
 	int fd;
 
+	__u32 btf_id;
+
 	/* Pointer size (in bytes) for a target architecture of this BTF */
 	int ptr_sz;
 };
@@ -430,33 +432,9 @@ const struct btf *btf__base_btf(const struct btf *btf)
 	return btf->base_btf;
 }
 
-static __u32 btf_get_vmlinux_obj_id(void)
-{
-	struct bpf_btf_info btf_info;
-	unsigned int len = sizeof(btf_info);
-	int err = 0;
-
-	memset(&btf_info, 0, sizeof(btf_info));
-	err = bpf_get_vmlinux_btf_info(&btf_info, &len);
-
-	if (err) return 0;
-	return btf_info.id;
-}
-
 __u32 btf_obj_id(const struct btf *btf)
 {
-	struct bpf_btf_info btf_info;
-	unsigned int len = sizeof(btf_info);
-	int err = 0;
-	int fd = btf__fd(btf);
-
-	if (btf->base_btf == NULL) return btf_get_vmlinux_obj_id();
-
-	memset(&btf_info, 0, sizeof(btf_info));
-	err = bpf_obj_get_info_by_fd(fd, &btf_info, &len);
-
-	if (err) return 0;
-	return btf_info.id;
+	return btf->btf_id;
 }
 
 /* internal helper returning non-const pointer to a type */
@@ -1357,7 +1335,7 @@ const char *btf__name_by_offset(const struct btf *btf, __u32 offset)
 	return btf__str_by_offset(btf, offset);
 }
 
-struct btf *btf_get_from_fd(int btf_fd, struct btf *base_btf)
+static struct btf *btf_get_from_fd_or_vmlinux(int btf_fd, struct btf *base_btf)
 {
 	struct bpf_btf_info btf_info;
 	__u32 len = sizeof(btf_info);
@@ -1378,7 +1356,9 @@ struct btf *btf_get_from_fd(int btf_fd, struct btf *base_btf)
 	memset(&btf_info, 0, sizeof(btf_info));
 	btf_info.btf = ptr_to_u64(ptr);
 	btf_info.btf_size = last_size;
-	err = bpf_obj_get_info_by_fd(btf_fd, &btf_info, &len);
+	err = (btf_fd >= 0) ?
+		bpf_obj_get_info_by_fd(btf_fd, &btf_info, &len)
+		: bpf_get_vmlinux_btf_info(&btf_info, &len);
 
 	if (!err && btf_info.btf_size > last_size) {
 		void *temp_ptr;
@@ -1396,7 +1376,9 @@ struct btf *btf_get_from_fd(int btf_fd, struct btf *base_btf)
 		btf_info.btf = ptr_to_u64(ptr);
 		btf_info.btf_size = last_size;
 
-		err = bpf_obj_get_info_by_fd(btf_fd, &btf_info, &len);
+		err = (btf_fd >= 0) ?
+			bpf_obj_get_info_by_fd(btf_fd, &btf_info, &len)
+			: bpf_get_vmlinux_btf_info(&btf_info, &len);
 	}
 
 	if (err || btf_info.btf_size > last_size) {
@@ -1405,11 +1387,24 @@ struct btf *btf_get_from_fd(int btf_fd, struct btf *base_btf)
 	}
 
 	btf = btf_new(ptr, btf_info.btf_size, base_btf);
-	btf->fd = btf_fd;
+	btf->btf_id = btf_info.id;
 
 exit_free:
 	free(ptr);
 	return btf;
+}
+
+struct btf *btf_get_from_fd(int btf_fd, struct btf *base_btf)
+{
+	if (btf_fd < 0)
+		return ERR_PTR(-EPERM);
+
+	return btf_get_from_fd_or_vmlinux(btf_fd, base_btf);
+}
+
+static struct btf *btf_get_vmlinux_from_kernel(void)
+{
+	return btf_get_from_fd_or_vmlinux(-1, NULL);
 }
 
 struct btf *btf__load_from_kernel_by_id_split(__u32 id, struct btf *base_btf)
@@ -4460,6 +4455,10 @@ struct btf *btf__load_vmlinux_btf(void)
 	struct btf *btf;
 	int i, err;
 
+	btf = btf_get_vmlinux_from_kernel();
+	if (!IS_ERR(btf))
+		return btf;
+
 	uname(&buf);
 
 	for (i = 0; i < ARRAY_SIZE(locations); i++) {
@@ -4477,6 +4476,7 @@ struct btf *btf__load_vmlinux_btf(void)
 		if (err)
 			continue;
 
+		btf->btf_id = 0;
 		return btf;
 	}
 

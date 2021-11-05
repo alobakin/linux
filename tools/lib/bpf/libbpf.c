@@ -4803,6 +4803,7 @@ static int bpf_core_add_cands(struct bpf_core_cand *local_cand,
 			      size_t local_essent_len,
 			      const struct btf *targ_btf,
 			      const char *targ_btf_name,
+			      __u32 targ_btf_id,
 			      int targ_start_id,
 			      struct bpf_core_cand_list *cands)
 {
@@ -4843,6 +4844,7 @@ static int bpf_core_add_cands(struct bpf_core_cand *local_cand,
 		cand->t = t;
 		cand->name = targ_name;
 		cand->id = i;
+		cand->btf_module_id = targ_btf_id;
 
 		cands->cands = new_cands;
 		cands->len++;
@@ -4948,6 +4950,7 @@ bpf_core_find_cands(struct bpf_object *obj, const struct btf *local_btf, __u32 l
 	struct bpf_core_cand local_cand = {};
 	struct bpf_core_cand_list *cands;
 	const struct btf *main_btf;
+	__u32 main_btf_id;
 	size_t local_essent_len;
 	int err, i;
 
@@ -4967,7 +4970,8 @@ bpf_core_find_cands(struct bpf_object *obj, const struct btf *local_btf, __u32 l
 
 	/* Attempt to find target candidates in vmlinux BTF first */
 	main_btf = obj->btf_vmlinux_override ?: obj->btf_vmlinux;
-	err = bpf_core_add_cands(&local_cand, local_essent_len, main_btf, "vmlinux", 1, cands);
+	main_btf_id = obj->btf_vmlinux_override ? 0 : btf_get_vmlinux_obj_id();
+	err = bpf_core_add_cands(&local_cand, local_essent_len, main_btf, "vmlinux", main_btf_id, 1, cands);
 	if (err)
 		goto err_out;
 
@@ -4988,6 +4992,7 @@ bpf_core_find_cands(struct bpf_object *obj, const struct btf *local_btf, __u32 l
 		err = bpf_core_add_cands(&local_cand, local_essent_len,
 					 obj->btf_modules[i].btf,
 					 obj->btf_modules[i].name,
+					 obj->btf_modules[i].id,
 					 btf__get_nr_types(obj->btf_vmlinux) + 1,
 					 cands);
 		if (err)

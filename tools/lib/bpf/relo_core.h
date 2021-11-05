@@ -80,6 +80,7 @@ struct bpf_core_cand {
 	const struct btf_type *t;
 	const char *name;
 	__u32 id;
+	__u32 btf_module_id;
 };
 
 /* dynamically sized list of type IDs and its associated struct btf */

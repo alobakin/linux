@@ -1322,6 +1322,12 @@ config DYNAMIC_SIGFRAME
 config HAVE_ARCH_NODE_DEV_GROUP
 	bool
 
+config ARCH_SUPPORTS_ASM_FUNCTION_SECTIONS
+	bool
+	help
+	  An arch should select this if it can be built and run with its
+	  asm functions placed into separate sections to improve DCE and LTO.
+
 source "kernel/gcov/Kconfig"
 
 source "scripts/gcc-plugins/Kconfig"

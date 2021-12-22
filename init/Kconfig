@@ -1386,6 +1386,16 @@ config CC_OPTIMIZE_FOR_SIZE
 
 endchoice
 
+config HAVE_ASM_FUNCTION_SECTIONS
+	depends on ARCH_SUPPORTS_ASM_FUNCTION_SECTIONS
+	depends on $(cc-option,-Wa$(comma)--sectname-subst)
+	def_bool y
+	help
+	  This enables asm function sections if both architecture and
+	  toolchain support it. It allows creating a separate section
+	  for each function written in assembly in order to improve DCE
+	  and LTO (works the same way as -ffunction-sections for C code).
+
 config HAVE_LD_DEAD_CODE_DATA_ELIMINATION
 	bool
 	help

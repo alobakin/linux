@@ -877,6 +877,24 @@ ifeq ($(CONFIG_LD_HAS_Z_UNIQUE_SYMBOL)$(CONFIG_LIVEPATCH),yy)
 KBUILD_LDFLAGS += -z unique-symbol
 endif
 
+# Allow ASM code to generate separate sections for each function. See
+# `include/linux/linkage.h` for explanation. This flag is to enable GAS to
+# insert the name of the previous section instead of `%S` inside .pushsection
+ifdef CONFIG_HAVE_ASM_FUNCTION_SECTIONS
+ifneq ($(CONFIG_LD_DEAD_CODE_DATA_ELIMINATION)$(CONFIG_LTO_CLANG),)
+SECSUBST_AFLAGS := -Wa,--sectname-subst
+KBUILD_AFLAGS_KERNEL += $(SECSUBST_AFLAGS)
+KBUILD_CFLAGS_KERNEL += $(SECSUBST_AFLAGS)
+export SECSUBST_AFLAGS
+endif
+
+# Same for modules. LD DCE doesn't work for them, thus not checking for it
+ifneq ($(CONFIG_LTO_CLANG),)
+KBUILD_AFLAGS_MODULE += -Wa,--sectname-subst
+KBUILD_CFLAGS_MODULE += -Wa,--sectname-subst
+endif
+endif # CONFIG_HAVE_ASM_FUNCTION_SECTIONS
+
 ifdef CONFIG_LD_DEAD_CODE_DATA_ELIMINATION
 KBUILD_CFLAGS_KERNEL += -ffunction-sections -fdata-sections
 LDFLAGS_vmlinux += --gc-sections

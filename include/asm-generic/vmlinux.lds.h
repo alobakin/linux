@@ -84,6 +84,9 @@
 /* Align . to a 8 byte boundary equals to maximum function alignment. */
 #define ALIGN_FUNCTION()  . = ALIGN(8)
 
+/* This is useful for collecting individual sections back into one main */
+#define SECT_WILDCARD(sect)	sect sect.[0-9a-zA-Z_]*
+
 /*
  * LD_DEAD_CODE_DATA_ELIMINATION option enables -fdata-sections, which
  * generates .data.identifier sections, which need to be pulled in with
@@ -97,12 +100,12 @@
  * sections to be brought in with rodata.
  */
 #if defined(CONFIG_LD_DEAD_CODE_DATA_ELIMINATION) || defined(CONFIG_LTO_CLANG)
-#define TEXT_MAIN .text .text.[0-9a-zA-Z_]*
-#define DATA_MAIN .data .data.[0-9a-zA-Z_]* .data..L* .data..compoundliteral* .data.$__unnamed_* .data.$L*
-#define SDATA_MAIN .sdata .sdata.[0-9a-zA-Z_]*
-#define RODATA_MAIN .rodata .rodata.[0-9a-zA-Z_]* .rodata..L*
-#define BSS_MAIN .bss .bss.[0-9a-zA-Z_]* .bss..compoundliteral*
-#define SBSS_MAIN .sbss .sbss.[0-9a-zA-Z_]*
+#define TEXT_MAIN SECT_WILDCARD(.text)
+#define DATA_MAIN SECT_WILDCARD(.data) .data..L* .data..compoundliteral* .data.$__unnamed_* .data.$L*
+#define SDATA_MAIN SECT_WILDCARD(.sdata)
+#define RODATA_MAIN SECT_WILDCARD(.rodata) .rodata..L*
+#define BSS_MAIN SECT_WILDCARD(.bss) .bss..compoundliteral*
+#define SBSS_MAIN SECT_WILDCARD(.sbss)
 #else
 #define TEXT_MAIN .text
 #define DATA_MAIN .data
@@ -564,7 +567,7 @@
 #define NOINSTR_TEXT							\
 		ALIGN_FUNCTION();					\
 		__noinstr_text_start = .;				\
-		*(.noinstr.text)					\
+		*(SECT_WILDCARD(.noinstr.text))				\
 		__noinstr_text_end = .;
 
 /*
@@ -621,7 +624,7 @@
 #define ENTRY_TEXT							\
 		ALIGN_FUNCTION();					\
 		__entry_text_start = .;					\
-		*(.entry.text)						\
+		*(SECT_WILDCARD(.entry.text))				\
 		__entry_text_end = .;
 
 #define IRQENTRY_TEXT							\
@@ -643,7 +646,7 @@
 		__static_call_text_end = .;
 
 /* Section used for early init (in .S files) */
-#define HEAD_TEXT  KEEP(*(.head.text))
+#define HEAD_TEXT  KEEP(*(SECT_WILDCARD(.head.text)))
 
 #define HEAD_TEXT_SECTION							\
 	.head.text : AT(ADDR(.head.text) - LOAD_OFFSET) {		\

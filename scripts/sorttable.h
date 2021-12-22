@@ -103,11 +103,6 @@ struct orc_entry *g_orc_table;
 
 pthread_t orc_sort_thread;
 
-static inline unsigned long orc_ip(const int *ip)
-{
-	return (unsigned long)ip + *ip;
-}
-
 static int orc_sort_cmp(const void *_a, const void *_b)
 {
 	struct orc_entry *orc_a;

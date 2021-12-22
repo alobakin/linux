@@ -86,6 +86,9 @@ config CC_HAS_ASM_INLINE
 config CC_HAS_NO_PROFILE_FN_ATTR
 	def_bool $(success,echo '__attribute__((no_profile_instrument_function)) int x();' | $(CC) -x c - -c -o /dev/null -Werror)
 
+config LD_HAS_Z_UNIQUE_SYMBOL
+	def_bool $(ld-option,-z unique-symbol)
+
 config CONSTRUCTORS
 	bool
 

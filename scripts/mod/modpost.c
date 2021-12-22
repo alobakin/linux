@@ -689,11 +689,28 @@ static void handle_modversion(const struct module *mod,
 	sym_set_crc(symname, crc);
 }
 
+static char *remove_dot(char *s)
+{
+	size_t n = strcspn(s, ".");
+
+	if (n && s[n]) {
+		size_t m = strspn(s + n + 1, "0123456789");
+
+		if (m && (s[n + m + 1] == '.' || s[n + m + 1] == 0))
+			s[n] = 0;
+
+		/* strip trailing .lto */
+		if (strends(s, ".lto"))
+			s[strlen(s) - 4] = '\0';
+	}
+
+	return s;
+}
+
 static void handle_symbol(struct module *mod, struct elf_info *info,
 			  const Elf_Sym *sym, const char *symname)
 {
 	enum export export;
-	const char *name;
 
 	if (strstarts(symname, "__ksymtab"))
 		export = export_from_secname(info, get_secindex(info, sym));
@@ -734,8 +751,11 @@ static void handle_symbol(struct module *mod, struct elf_info *info,
 	default:
 		/* All exported symbols */
 		if (strstarts(symname, "__ksymtab_")) {
-			name = symname + strlen("__ksymtab_");
-			sym_add_exported(name, mod, export);
+			char *name;
+
+			name = NOFAIL(strdup(symname + strlen("__ksymtab_")));
+			sym_add_exported(remove_dot(name), mod, export);
+			free(name);
 		}
 		if (strcmp(symname, "init_module") == 0)
 			mod->has_init = 1;
@@ -1978,22 +1998,6 @@ static void check_sec_ref(struct module *mod, const char *modname,
 		else if (sechdrs[i].sh_type == SHT_REL)
 			section_rel(modname, elf, &elf->sechdrs[i]);
 	}
-}
-
-static char *remove_dot(char *s)
-{
-	size_t n = strcspn(s, ".");
-
-	if (n && s[n]) {
-		size_t m = strspn(s + n + 1, "0123456789");
-		if (m && (s[n + m + 1] == '.' || s[n + m + 1] == 0))
-			s[n] = 0;
-
-		/* strip trailing .lto */
-		if (strends(s, ".lto"))
-			s[strlen(s) - 4] = '\0';
-	}
-	return s;
 }
 
 static void read_symbols(const char *modname)

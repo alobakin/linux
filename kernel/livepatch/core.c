@@ -143,11 +143,13 @@ static int klp_find_callback(void *data, const char *name,
 	args->count++;
 
 	/*
-	 * Finish the search when the symbol is found for the desired position
-	 * or the position is not defined for a non-unique symbol.
+	 * Finish the search when unique symbol names are enabled
+	 * or the symbol is found for the desired position or the
+	 * position is not defined for a non-unique symbol.
 	 */
-	if ((args->pos && (args->count == args->pos)) ||
-	    (!args->pos && (args->count > 1)))
+	if (IS_ENABLED(CONFIG_LD_HAS_Z_UNIQUE_SYMBOL) ||
+	    (args->pos && args->count == args->pos) ||
+	    (!args->pos && args->count > 1))
 		return 1;
 
 	return 0;
@@ -168,6 +170,13 @@ static int klp_find_object_symbol(const char *objname, const char *name,
 		module_kallsyms_on_each_symbol(klp_find_callback, &args);
 	else
 		kallsyms_on_each_symbol(klp_find_callback, &args);
+
+	/*
+	 * If the LD's `-z unique-symbol` flag is available and enabled,
+	 * sympos checks are not relevant.
+	 */
+	if (IS_ENABLED(CONFIG_LD_HAS_Z_UNIQUE_SYMBOL))
+		sympos = 0;
 
 	/*
 	 * Ensure an address was found. If sympos is 0, ensure symbol is unique;

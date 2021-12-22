@@ -158,8 +158,8 @@ SYM_FUNC_START_ALIAS(efi_stub_entry)
 	call	efi_main
 	/* efi_main returns the possibly relocated address of startup_32 */
 	jmp	*%eax
-SYM_FUNC_END(efi32_stub_entry)
 SYM_FUNC_END_ALIAS(efi_stub_entry)
+SYM_FUNC_END(efi32_stub_entry)
 #endif
 
 	.text

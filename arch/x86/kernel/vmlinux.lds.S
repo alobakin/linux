@@ -141,7 +141,7 @@ SECTIONS
 
 #ifdef CONFIG_RETPOLINE
 		__indirect_thunk_start = .;
-		*(.text.__x86.indirect_thunk)
+		*(SECT_WILDCARD(.text.__x86.indirect_thunk))
 		__indirect_thunk_end = .;
 #endif
 	} :text =0xcccc

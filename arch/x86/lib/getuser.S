@@ -163,8 +163,7 @@ SYM_FUNC_START(__get_user_nocheck_8)
 SYM_FUNC_END(__get_user_nocheck_8)
 EXPORT_SYMBOL(__get_user_nocheck_8)
 
-
-SYM_CODE_START_LOCAL(.Lbad_get_user_clac)
+SYM_CODE_START_LOCAL_SECT(.Lbad_get_user_clac, bad_get_user_clac)
 	ASM_CLAC
 bad_get_user:
 	xor %edx,%edx
@@ -173,7 +172,7 @@ bad_get_user:
 SYM_CODE_END(.Lbad_get_user_clac)
 
 #ifdef CONFIG_X86_32
-SYM_CODE_START_LOCAL(.Lbad_get_user_8_clac)
+SYM_CODE_START_LOCAL_SECT(.Lbad_get_user_8_clac, bad_get_user_8_clac)
 	ASM_CLAC
 bad_get_user_8:
 	xor %edx,%edx

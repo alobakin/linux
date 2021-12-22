@@ -35,6 +35,7 @@ PV_CALLEE_SAVE_REGS_THUNK(__pv_queued_spin_unlock_slowpath);
  *   rdx = internal variable (set to 0)
  */
 asm    (".pushsection .text;"
+	ASM_PUSH_SECTION(__raw_callee_save___pv_queued_spin_unlock) ";"
 	".globl " PV_UNLOCK ";"
 	".type " PV_UNLOCK ", @function;"
 	".align 4,0x90;"
@@ -58,6 +59,7 @@ asm    (".pushsection .text;"
 	FRAME_END
 	ASM_RET
 	".size " PV_UNLOCK ", .-" PV_UNLOCK ";"
+	ASM_POP_SECTION() ";"
 	".popsection");
 
 #else /* CONFIG_64BIT */

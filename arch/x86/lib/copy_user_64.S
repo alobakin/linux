@@ -220,7 +220,7 @@ EXPORT_SYMBOL(copy_user_enhanced_fast_string)
  * Output:
  * eax uncopied bytes or 0 if successful.
  */
-SYM_CODE_START_LOCAL(.Lcopy_user_handle_tail)
+SYM_CODE_START_LOCAL_SECT(.Lcopy_user_handle_tail, copy_user_handle_tail)
 	cmp $X86_TRAP_MC,%eax
 	je 3f
 

@@ -46,7 +46,7 @@ SYM_FUNC_END(protected_mode_jump)
 
 	.code32
 	.section ".text32","ax"
-SYM_FUNC_START_LOCAL_NOALIGN(.Lin_pm32)
+SYM_FUNC_START_LOCAL_NOALIGN_SECT(.Lin_pm32, in_pm32)
 	# Set up data segments for flat 32-bit mode
 	movl	%ecx, %ds
 	movl	%ecx, %es

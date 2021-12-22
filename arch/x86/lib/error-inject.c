@@ -8,11 +8,13 @@ asmlinkage void just_return_func(void);
 
 asm(
 	".text\n"
+	ASM_PUSH_SECTION(just_return_func) "\n"
 	".type just_return_func, @function\n"
 	".globl just_return_func\n"
 	"just_return_func:\n"
 		ASM_RET
 	".size just_return_func, .-just_return_func\n"
+	ASM_POP_SECTION() "\n"
 );
 
 void override_function_with_return(struct pt_regs *regs)

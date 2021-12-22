@@ -16,7 +16,7 @@
 
 .text
 
-SYM_FUNC_START(swsusp_arch_suspend)
+SYM_FUNC_START_SECT(swsusp_arch_suspend, hibernate_page)
 	movl %esp, saved_context_esp
 	movl %ebx, saved_context_ebx
 	movl %ebp, saved_context_ebp
@@ -35,7 +35,7 @@ SYM_FUNC_START(swsusp_arch_suspend)
 	RET
 SYM_FUNC_END(swsusp_arch_suspend)
 
-SYM_CODE_START(restore_image)
+SYM_CODE_START_SECT(restore_image, hibernate_page)
 	/* prepare to jump to the image kernel */
 	movl	restore_jump_address, %ebx
 	movl	restore_cr3, %ebp
@@ -48,7 +48,7 @@ SYM_CODE_START(restore_image)
 SYM_CODE_END(restore_image)
 
 /* code below has been relocated to a safe page */
-SYM_CODE_START(core_restore_code)
+SYM_CODE_START_SECT(core_restore_code, hibernate_page)
 	movl	temp_pgt, %eax
 	movl	%eax, %cr3
 
@@ -81,8 +81,10 @@ done:
 SYM_CODE_END(core_restore_code)
 
 	/* code below belongs to the image kernel */
+SYM_PUSH_SECTION(hibernate_page)
 	.align PAGE_SIZE
-SYM_FUNC_START(restore_registers)
+SYM_POP_SECTION()
+SYM_FUNC_START_SECT(restore_registers, hibernate_page)
 	/* go back to the original page tables */
 	movl	%ebp, %cr3
 	movl	mmu_cr4_features, %ecx

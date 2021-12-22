@@ -24,8 +24,10 @@
 #include <asm/nospec-branch.h>
 
 	 /* code below belongs to the image kernel */
+SYM_PUSH_SECTION(hibernate_page)
 	.align PAGE_SIZE
-SYM_FUNC_START(restore_registers)
+SYM_POP_SECTION()
+SYM_FUNC_START_SECT(restore_registers, hibernate_page)
 	/* go back to the original page tables */
 	movq    %r9, %cr3
 
@@ -69,7 +71,7 @@ SYM_FUNC_START(restore_registers)
 	RET
 SYM_FUNC_END(restore_registers)
 
-SYM_FUNC_START(swsusp_arch_suspend)
+SYM_FUNC_START_SECT(swsusp_arch_suspend, hibernate_page)
 	movq	$saved_context, %rax
 	movq	%rsp, pt_regs_sp(%rax)
 	movq	%rbp, pt_regs_bp(%rax)
@@ -99,7 +101,7 @@ SYM_FUNC_START(swsusp_arch_suspend)
 	RET
 SYM_FUNC_END(swsusp_arch_suspend)
 
-SYM_FUNC_START(restore_image)
+SYM_FUNC_START_SECT(restore_image, hibernate_page)
 	/* prepare to jump to the image kernel */
 	movq	restore_jump_address(%rip), %r8
 	movq	restore_cr3(%rip), %r9
@@ -118,7 +120,7 @@ SYM_FUNC_START(restore_image)
 SYM_FUNC_END(restore_image)
 
 	/* code below has been relocated to a safe page */
-SYM_FUNC_START(core_restore_code)
+SYM_FUNC_START_SECT(core_restore_code, hibernate_page)
 	/* switch to temporary page tables */
 	movq	%rax, %cr3
 	/* flush TLB */

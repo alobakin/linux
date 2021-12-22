@@ -17,8 +17,9 @@
  *
  * rax   original destination
  */
-SYM_FUNC_START_WEAK(memset)
+
 SYM_FUNC_START(__memset)
+SYM_FUNC_START_WEAK_ALIAS(memset)
 	/*
 	 * Some CPUs support enhanced REP MOVSB/STOSB feature. It is recommended
 	 * to use it when possible. If not available, use fast string instructions.
@@ -41,8 +42,8 @@ SYM_FUNC_START(__memset)
 	rep stosb
 	movq %r9,%rax
 	RET
-SYM_FUNC_END(__memset)
 SYM_FUNC_END_ALIAS(memset)
+SYM_FUNC_END(__memset)
 EXPORT_SYMBOL(memset)
 EXPORT_SYMBOL(__memset)
 

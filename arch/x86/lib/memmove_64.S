@@ -24,9 +24,8 @@
  * Output:
  * rax: dest
  */
-SYM_FUNC_START_WEAK(memmove)
 SYM_FUNC_START(__memmove)
-
+SYM_FUNC_START_WEAK_ALIAS(memmove)
 	mov %rdi, %rax
 
 	/* Decide forward/backward copy mode */
@@ -206,7 +205,7 @@ SYM_FUNC_START(__memmove)
 	movb %r11b, (%rdi)
 13:
 	RET
-SYM_FUNC_END(__memmove)
 SYM_FUNC_END_ALIAS(memmove)
+SYM_FUNC_END(__memmove)
 EXPORT_SYMBOL(__memmove)
 EXPORT_SYMBOL(memmove)

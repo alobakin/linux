@@ -421,6 +421,7 @@ my ($H0,$H1,$H2,$H3,$H4, $T0,$T1,$T2,$T3,$T4, $D0,$D1,$D2,$D3,$D4, $MASK) =
     map("%xmm$_",(0..15));
 
 $code.=<<___;
+SYM_PUSH_SECTION(__poly1305_block)
 .type	__poly1305_block,\@abi-omnipotent
 .align	32
 __poly1305_block:
@@ -431,7 +432,9 @@ $code.=<<___;
 	pop $ctx
 	ret
 .size	__poly1305_block,.-__poly1305_block
+SYM_POP_SECTION()
 
+SYM_PUSH_SECTION(__poly1305_init_avx)
 .type	__poly1305_init_avx,\@abi-omnipotent
 .align	32
 __poly1305_init_avx:
@@ -596,6 +599,7 @@ __poly1305_init_avx:
 	pop %rbp
 	ret
 .size	__poly1305_init_avx,.-__poly1305_init_avx
+SYM_POP_SECTION()
 ___
 
 &declare_function("poly1305_blocks_avx", 32, 4);

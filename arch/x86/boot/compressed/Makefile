@@ -58,6 +58,7 @@ KBUILD_CFLAGS += -include $(srctree)/include/linux/hidden.h
 CFLAGS_sev.o += -I$(objtree)/arch/x86/lib/
 
 KBUILD_AFLAGS  := $(KBUILD_CFLAGS) -D__ASSEMBLY__
+KBUILD_AFLAGS += $(SECSUBST_AFLAGS)
 GCOV_PROFILE := n
 UBSAN_SANITIZE :=n
 

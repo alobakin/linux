@@ -38,9 +38,11 @@
 #define CP_PA_BACKUP_PAGES_MAP	DATA(0x30)
 
 	.text
+SYM_PUSH_SECTION(kexec_control_code)
 	.align PAGE_SIZE
 	.code64
-SYM_CODE_START_NOALIGN(relocate_kernel)
+SYM_POP_SECTION()
+SYM_CODE_START_NOALIGN_SECT(relocate_kernel, kexec_control_code)
 	UNWIND_HINT_EMPTY
 	/*
 	 * %rdi indirection_page
@@ -107,7 +109,7 @@ SYM_CODE_START_NOALIGN(relocate_kernel)
 	RET
 SYM_CODE_END(relocate_kernel)
 
-SYM_CODE_START_LOCAL_NOALIGN(identity_mapped)
+SYM_CODE_START_LOCAL_NOALIGN_SECT(identity_mapped, kexec_control_code)
 	UNWIND_HINT_EMPTY
 	/* set return address to 0 if not preserving context */
 	pushq	$0
@@ -213,7 +215,7 @@ SYM_CODE_START_LOCAL_NOALIGN(identity_mapped)
 	RET
 SYM_CODE_END(identity_mapped)
 
-SYM_CODE_START_LOCAL_NOALIGN(virtual_mapped)
+SYM_CODE_START_LOCAL_NOALIGN_SECT(virtual_mapped, kexec_control_code)
 	UNWIND_HINT_EMPTY
 	movq	RSP(%r8), %rsp
 	movq	CR4(%r8), %rax
@@ -235,7 +237,7 @@ SYM_CODE_START_LOCAL_NOALIGN(virtual_mapped)
 SYM_CODE_END(virtual_mapped)
 
 	/* Do the copies */
-SYM_CODE_START_LOCAL_NOALIGN(swap_pages)
+SYM_CODE_START_LOCAL_NOALIGN_SECT(swap_pages, kexec_control_code)
 	UNWIND_HINT_EMPTY
 	movq	%rdi, %rcx 	/* Put the page_list in %rcx */
 	xorl	%edi, %edi
@@ -291,5 +293,7 @@ SYM_CODE_START_LOCAL_NOALIGN(swap_pages)
 	RET
 SYM_CODE_END(swap_pages)
 
+SYM_PUSH_SECTION(kexec_control_code)
 	.globl kexec_control_code_size
 .set kexec_control_code_size, . - relocate_kernel
+SYM_POP_SECTION()

@@ -1019,6 +1019,7 @@ NOKPROBE_SYMBOL(kprobe_int3_handler);
  */
 asm(
 	".text\n"
+	ASM_PUSH_SECTION(__kretprobe_trampoline) "\n"
 	".global __kretprobe_trampoline\n"
 	".type __kretprobe_trampoline, @function\n"
 	"__kretprobe_trampoline:\n"
@@ -1053,6 +1054,7 @@ asm(
 #endif
 	ASM_RET
 	".size __kretprobe_trampoline, .-__kretprobe_trampoline\n"
+	ASM_POP_SECTION() "\n"
 );
 NOKPROBE_SYMBOL(__kretprobe_trampoline);
 /*

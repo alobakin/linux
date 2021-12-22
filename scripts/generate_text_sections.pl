@@ -48,6 +48,7 @@ my $readelf = $ENV{'READELF'} || die "$0: ERROR: READELF not set?";
 ## text sections array
 my @sections = ();
 my $has_ccf = 0;
+my $vmlinux = 0;
 
 ## max alignment found to reserve some space. It would probably be
 ## better to start from 64, but CONFIG_DEBUG_FORCE_FUNCTION_ALIGN_64B
@@ -76,6 +77,12 @@ sub read_sections {
 		## spawning orphans.
 		if ($name eq ".text.__cfi_check_fail") {
 			$has_ccf = 1;
+		}
+
+		## If we're processing a module, don't reserve any space
+		## at the end as its sections are being allocated separately.
+		if ($name eq ".sched.text") {
+			$vmlinux = 1;
 		}
 
 		if (!($name =~ /^\.text(\.(?!hot\.|unknown\.|unlikely\.|.san\.)[0-9a-zA-Z_]*){1,2}((\.constprop|\.isra|\.part)\.[0-9]){0,2}(|\.[0-9cfi]*)$/)) {
@@ -141,7 +148,7 @@ sub print_reserve {
 	## If we have text sections aligned with 128 bytes or more, make
 	## sure we reserve some space for them to not overlap _etext
 	## while shuffling sections.
-	if (!$count) {
+	if (!$vmlinux or !$count) {
 		return;
 	}
 

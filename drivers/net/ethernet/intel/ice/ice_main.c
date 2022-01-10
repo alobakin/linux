@@ -2611,11 +2611,15 @@ static void ice_xdp_rings_set_metadata(struct ice_vsi *vsi)
 {
 	int i;
 
-	ice_for_each_rxq(vsi, i)
+	ice_for_each_rxq(vsi, i) {
 		vsi->rx_rings[i]->xdp_metadata_support = vsi->xdp_metadata_support;
+		vsi->rx_rings[i]->xdp_meta_tail = vsi->xdp_meta_tail;
+	}
 
-	for (i = 0; i < vsi->num_xdp_txq; i++)
+	for (i = 0; i < vsi->num_xdp_txq; i++) {
 		vsi->xdp_rings[i]->xdp_metadata_support = vsi->xdp_metadata_support;
+		vsi->xdp_rings[i]->xdp_meta_tail = vsi->xdp_meta_tail;
+	}
 }
 
 /**
@@ -2875,8 +2879,13 @@ ice_xdp_setup_prog(struct ice_vsi *vsi, struct bpf_prog *prog,
 		}
 	}
 
-	if (flags & XDP_FLAGS_USE_METADATA)
+	if (flags & XDP_FLAGS_USE_METADATA) {
 		vsi->xdp_metadata_support = true;
+		ret = xdp_meta_fill_id_magic(&vsi->xdp_meta_tail, THIS_MODULE,
+					     "xdp_meta_generic");
+		if (ret)
+			NL_SET_ERR_MSG_MOD(extack, "Could not fill in xdp meta tail");
+	}
 
 	if (!ice_is_xdp_ena_vsi(vsi) && prog) {
 		xdp_ring_err = ice_vsi_determine_xdp_res(vsi);

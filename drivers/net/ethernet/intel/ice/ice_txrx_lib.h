@@ -70,14 +70,30 @@ static inline void ice_xdp_ring_update_tail(struct ice_tx_ring *xdp_ring)
 	writel_relaxed(xdp_ring->next_to_use, xdp_ring->tail);
 }
 
-static inline void ice_xdp_set_meta(struct xdp_buff *xdp, union ice_32b_rx_flex_desc *desc)
+static inline void ice_xdp_set_meta(struct xdp_buff *xdp, union ice_32b_rx_flex_desc *desc,
+				    struct xdp_meta_tail tail)
 {
 	struct ice_32b_rx_flex_desc_nic *flex = (struct ice_32b_rx_flex_desc_nic *)desc;
 	struct xdp_meta_generic *md = xdp->data - sizeof(struct xdp_meta_generic);
 
+	/* Fields are already in little endian*/
+	md->rx_vid = flex->flex_ts.flex.vlan_id;
+	md->rx_hash = flex->rss_hash;
+
+	md->rx_flags = 0;
+	md->rx_qid = 0;
+	md->rx_csum = 0;
+	md->rx_tstamp = 0;
+
+	md->tx_flags = 0;
+	md->tx_csum_off = 0;
+	md->tx_vid = 0;
+
+	md->btf_id = tail.btf_id;
+	md->type_id = tail.type_id;
+	md->magic = tail.magic;
+
 	xdp->data_meta = md;
-	md->rxcvid = le16_to_cpu(flex->flex_ts.flex.vlan_id);
-	md->hash = le32_to_cpu(flex->rss_hash);
 }
 
 void ice_finalize_xdp_rx(struct ice_tx_ring *xdp_ring, unsigned int xdp_res);

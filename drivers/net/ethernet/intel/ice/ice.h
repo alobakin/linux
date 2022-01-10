@@ -425,6 +425,7 @@ struct ice_vsi {
 	struct ice_channel *ch;
 
 	u8 xdp_metadata_support:1;	 /* true if VSI should support xdp meta */
+	struct xdp_meta_tail xdp_meta_tail;
 
 	/* setup back reference, to which aggregator node this VSI
 	 * corresponds to

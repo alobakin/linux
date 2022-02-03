@@ -121,6 +121,9 @@ struct btf {
 
 	/* Pointer size (in bytes) for a target architecture of this BTF */
 	int ptr_sz;
+
+	/* BTF object id, valid for vmlinux and module BTF */
+	__u32 id;
 };
 
 static inline __u64 ptr_to_u64(const void *ptr)
@@ -451,6 +454,11 @@ __u32 btf__type_cnt(const struct btf *btf)
 const struct btf *btf__base_btf(const struct btf *btf)
 {
 	return btf->base_btf;
+}
+
+__u32 btf_obj_id(const struct btf *btf)
+{
+	return btf->id;
 }
 
 /* internal helper returning non-const pointer to a type */
@@ -793,6 +801,7 @@ static struct btf *btf_new_empty(struct btf *base_btf)
 	btf->fd = -1;
 	btf->ptr_sz = sizeof(void *);
 	btf->swapped_endian = false;
+	btf->id = 0;
 
 	if (base_btf) {
 		btf->base_btf = base_btf;
@@ -843,6 +852,7 @@ static struct btf *btf_new(const void *data, __u32 size, struct btf *base_btf)
 	btf->start_id = 1;
 	btf->start_str_off = 0;
 	btf->fd = -1;
+	btf->id = 0;
 
 	if (base_btf) {
 		btf->base_btf = base_btf;
@@ -1356,6 +1366,8 @@ struct btf *btf_get_from_fd(int btf_fd, struct btf *base_btf)
 	}
 
 	btf = btf_new(ptr, btf_info.btf_size, base_btf);
+	if (!IS_ERR_OR_NULL(btf))
+		btf->id = btf_info.id;
 
 exit_free:
 	free(ptr);
@@ -4647,6 +4659,93 @@ static int btf_dedup_remap_types(struct btf_dedup *d)
 }
 
 /*
+ * Get first BTF with id bigger than the input one.
+ * Name buffer in the info structure must be initialized by the caller.
+ */
+struct btf *btf_load_next_with_info(__u32 start_id, struct bpf_btf_info *info,
+				    struct btf *base_btf, bool load_vmlinux)
+{
+	__u32 name_len = info->name_len;
+	__u32 len = sizeof(*info);
+	__u64 name = info->name;
+	__u32 id = start_id;
+
+	while (true) {
+		struct btf *btf;
+		int err, fd;
+
+		err = bpf_btf_get_next_id(id, &id);
+		if (err) {
+			err = -errno;
+			if (err != -ENOENT)
+				pr_warn("failed to iterate BTF objects: %d\n", err);
+			return ERR_PTR(err);
+		}
+
+		fd = bpf_btf_get_fd_by_id(id);
+		if (fd < 0) {
+			if (errno == ENOENT)
+				continue; /* expected race: non-vmlinux BTF was unloaded */
+			err = -errno;
+			pr_warn("failed to get BTF object #%d FD: %d\n", id, err);
+			return ERR_PTR(err);
+		}
+
+		memset(info, 0, len);
+		info->name = name;
+		info->name_len = name_len;
+
+		err = bpf_obj_get_info_by_fd(fd, info, &len);
+		if (err) {
+			err = -errno;
+			btf = ERR_PTR(err);
+			pr_warn("failed to get BTF object #%d info: %d\n", id, err);
+			goto err_out;
+		}
+
+		/* filter BTFs */
+		if (!info->kernel_btf ||
+		    (!strcmp((char *)name, "vmlinux")) == !load_vmlinux) {
+			close(fd);
+			continue;
+		}
+
+		btf = btf_get_from_fd(fd, base_btf);
+		err = libbpf_get_error(btf);
+		if (err) {
+			pr_warn("failed to load module [%s]'s BTF object #%d: %d\n",
+				(char *)name, id, err);
+			goto err_out;
+		}
+
+		btf->fd = fd;
+		return btf;
+
+err_out:
+		close(fd);
+		return btf;
+	}
+}
+
+static struct btf *btf_load_vmlinux_from_kernel(void)
+{
+	struct bpf_btf_info info;
+	struct btf *btf;
+	char name[64];
+
+	memset(&info, 0, sizeof(info));
+	info.name = ptr_to_u64(name);
+	info.name_len = sizeof(name);
+	btf = btf_load_next_with_info(0, &info, NULL, true);
+	if (!libbpf_get_error(btf)) {
+		close(btf->fd);
+		btf__set_fd(btf, -1);
+	}
+
+	return btf;
+}
+
+/*
  * Probe few well-known locations for vmlinux kernel image and try to load BTF
  * data out of it to use for target BTF.
  */
@@ -4672,6 +4771,14 @@ struct btf *btf__load_vmlinux_btf(void)
 	struct btf *btf;
 	int i, err;
 
+	btf = btf_load_vmlinux_from_kernel();
+	err = libbpf_get_error(btf);
+	pr_debug("loading vmlinux BTF from kernel: %d\n", err);
+	if (!err)
+		return btf;
+	pr_warn("failed to load vmlinux BTF from kernel: %d, will look though filesystem, err\n",
+		err);
+
 	uname(&buf);
 
 	for (i = 0; i < ARRAY_SIZE(locations); i++) {
@@ -4685,14 +4792,14 @@ struct btf *btf__load_vmlinux_btf(void)
 		else
 			btf = btf__parse_elf(path, NULL);
 		err = libbpf_get_error(btf);
-		pr_debug("loading kernel BTF '%s': %d\n", path, err);
+		pr_debug("loading vmlinux BTF '%s': %d\n", path, err);
 		if (err)
 			continue;
 
 		return btf;
 	}
 
-	pr_warn("failed to find valid kernel BTF\n");
+	pr_warn("failed to find valid vmlinux BTF\n");
 	return libbpf_err_ptr(-ESRCH);
 }
 

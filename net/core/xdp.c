@@ -4,6 +4,7 @@
  * Copyright (c) 2017 Jesper Dangaard Brouer, Red Hat Inc.
  */
 #include <linux/bpf.h>
+#include <linux/btf.h>
 #include <linux/filter.h>
 #include <linux/types.h>
 #include <linux/mm.h>
@@ -711,3 +712,40 @@ struct xdp_frame *xdpf_clone(struct xdp_frame *xdpf)
 
 	return nxdpf;
 }
+
+int xdp_meta_fill_id_magic(struct xdp_meta_tail *tail, const struct module *mod,
+			   const char *type_name)
+{
+	struct btf *btf = NULL, *vmlinux;
+	int id, err = 0;
+	u32 vmlinux_len;
+
+	vmlinux = bpf_get_btf_vmlinux();
+	if (IS_ERR(vmlinux))
+		return PTR_ERR(vmlinux);
+
+	btf = btf_get_module_btf(mod);
+	if (IS_ERR(btf))
+		return PTR_ERR(btf);
+	else if (!btf)
+		btf = vmlinux;
+
+	id = btf_find_by_name_kind(btf, type_name, BTF_KIND_STRUCT);
+	if (id < 0) {
+		err = id;
+		goto put;
+	}
+
+	tail->type_id = cpu_to_le32(id);
+	tail->magic = cpu_to_le32(XDP_META_GENERIC_MAGIC);
+
+	vmlinux_len = btf_nr_types(vmlinux);
+	tail->btf_id = (id < vmlinux_len) ? cpu_to_le32(btf_obj_id(vmlinux))
+		: cpu_to_le32(btf_obj_id(btf));
+put:
+	if (btf_is_module(btf))
+		btf_put(btf);
+
+	return err;
+}
+EXPORT_SYMBOL_GPL(xdp_meta_fill_id_magic);

@@ -1,4 +1,17 @@
 // SPDX-License-Identifier: GPL-2.0
+/*
+ * Copyright (C) 2022 Intel Corporation.
+ *
+ * Author: Larysa Zaremba <larysa.zaremba@intel.com>
+ *
+ * xdp_meta_read_trace_pipe() code copied from xdp-project example
+ * (https://github.com/xdp-project/bpf-examples/tree/master/ktrace-CO-RE)
+ * by Jesper Dangaard Brouer <brouer@redhat.com>
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of version 2 of the GNU General Public
+ * License as published by the Free Software Foundation.
+ */
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdbool.h>

@@ -71,9 +71,9 @@ static inline void ice_xdp_ring_update_tail(struct ice_tx_ring *xdp_ring)
 }
 
 static inline void ice_xdp_set_meta(struct xdp_buff *xdp, const union ice_32b_rx_flex_desc *desc,
-				    struct xdp_meta_tail tail)
+				    const struct xdp_meta_tail tail)
 {
-	struct ice_32b_rx_flex_desc_nic *flex = (struct ice_32b_rx_flex_desc_nic *)desc;
+	const struct ice_32b_rx_flex_desc_nic *flex = (struct ice_32b_rx_flex_desc_nic *)desc;
 	struct xdp_meta_generic *md = xdp->data - sizeof(struct xdp_meta_generic);
 
 	/* Fields are already in little endian*/

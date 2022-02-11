@@ -270,7 +270,6 @@ struct ice_rx_ring {
 	struct xdp_rxq_info xdp_rxq;
 	/* CL3 - 3rd cacheline starts here */
 	u16 q_index;			/* Queue number of ring */
-	u8 xdp_metadata_support:1;	/* is xdp metadata supported */
 
 	u16 count;			/* Number of descriptors */
 	u16 reg_idx;			/* HW register index of the ring */
@@ -295,6 +294,8 @@ struct ice_rx_ring {
 	struct xsk_buff_pool *xsk_pool;
 	struct sk_buff *skb;
 	dma_addr_t dma;			/* physical address of ring */
+	
+	u8 xdp_metadata_support:1;	/* is xdp metadata supported */
 	struct xdp_meta_tail xdp_meta_tail;
 
 #define ICE_RX_FLAGS_RING_BUILD_SKB	BIT(1)
@@ -325,7 +326,6 @@ struct ice_tx_ring {
 	u16 reg_idx;			/* HW register index of the ring */
 	u16 count;			/* Number of descriptors */
 	u16 q_index;			/* Queue number of ring */
-	u8 xdp_metadata_support:1;	/* is xdp metadata supported */
 
 	/* stats structs */
 	struct ice_txq_stats tx_stats;
@@ -340,6 +340,8 @@ struct ice_tx_ring {
 	u32 txq_teid;			/* Added Tx queue TEID */
 	/* CL4 - 4th cacheline starts here */
 	u16 xdp_tx_active;
+
+	u8 xdp_metadata_support:1;	/* is xdp metadata supported */
 	struct xdp_meta_tail xdp_meta_tail;
 
 #define ICE_TX_FLAGS_RING_XDP		BIT(0)

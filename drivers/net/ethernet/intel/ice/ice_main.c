@@ -2607,7 +2607,7 @@ static void ice_vsi_assign_bpf_prog(struct ice_vsi *vsi, struct bpf_prog *prog)
 		WRITE_ONCE(vsi->rx_rings[i]->xdp_prog, vsi->xdp_prog);
 }
 
-static void ice_xdp_rings_set_metadata(struct ice_vsi *vsi)
+static void ice_xdp_rings_set_metadata(const struct ice_vsi *vsi)
 {
 	int i;
 

@@ -740,8 +740,7 @@ int xdp_meta_fill_id_magic(struct xdp_meta_tail *tail, const struct module *mod,
 	tail->magic = cpu_to_le32(XDP_META_GENERIC_MAGIC);
 
 	vmlinux_len = btf_nr_types(vmlinux);
-	tail->btf_id = (id < vmlinux_len) ? cpu_to_le32(btf_obj_id(vmlinux))
-		: cpu_to_le32(btf_obj_id(btf));
+	tail->btf_id = cpu_to_le32(btf_obj_id(id < vmlinux_len ? vmlinux : btf));
 put:
 	if (btf_is_module(btf))
 		btf_put(btf);

@@ -24,10 +24,9 @@ struct ice_aqc_generic___min {
 SEC("xdp")
 int xdp_meta_prog(struct xdp_md *ctx)
 {
-	struct xdp_meta_generic *data_meta =
-		(void *)(long)ctx->data_meta;
-	void *data = (void *)(long)ctx->data;
+	struct xdp_meta_generic *data_meta = (void *)(long)ctx->data_meta;
 	void *data_end = (void *)(long)ctx->data_end;
+	void *data = (void *)(long)ctx->data;
 	u32 type_id_meta, btf_id_meta, magic_meta;
 	u64 btf_id_libbpf, btf_id_ice;
 	u16 rxcvid;
@@ -53,7 +52,7 @@ int xdp_meta_prog(struct xdp_md *ctx)
 	bpf_printk("id from libbpf %u (module BTF id: %u), id from hints metadata %u (module BTF id: %u)\n",
 		   btf_id_libbpf & 0xFFFFFFFF, btf_id_libbpf >> 32, type_id_meta, btf_id_meta);
 
-	if (btf_id_libbpf == ((u64)btf_id_meta << 32 | type_id_meta))
+	if (btf_id_libbpf == (((u64)btf_id_meta << 32) | type_id_meta))
 		bpf_printk("Received meta is generic\n");
 	else
 		bpf_printk("Received meta type is unknown\n");

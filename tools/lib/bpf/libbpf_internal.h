@@ -346,6 +346,8 @@ struct btf *btf_get_from_fd(int btf_fd, struct btf *base_btf);
 void btf_get_kernel_prefix_kind(enum bpf_attach_type attach_type,
 				const char **prefix, int *kind);
 __u32 btf_obj_id(const struct btf *btf);
+
+#define BTF_NAME_BUFF_LEN 64
 struct btf *btf_load_next_with_info(__u32 start_id, struct bpf_btf_info *info,
 				    struct btf *base_btf, bool load_vmlinux);
 

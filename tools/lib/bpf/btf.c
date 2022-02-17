@@ -4658,9 +4658,18 @@ static int btf_dedup_remap_types(struct btf_dedup *d)
 	return 0;
 }
 
-/*
- * Get first BTF with id bigger than the input one.
- * Name buffer in the info structure must be initialized by the caller.
+/**
+ * btf_load_next_with_info() - Get first BTF with id bigger than the input one.
+ * @start_id: Id to start the search from.
+ * @info: Buffer to put BTF info to, invalid content if call not succuessful.
+ * 	  Name buffer and length fields must be initialized by the caller.
+ * 	  It's recommended to prepare a buffer of BTF_NAME_BUFF_LEN length.
+ * @base_btf: Base BTF, can be NULL if load_vmlinux is true.
+ * @load_vmlinux: Look for the vmlinux BTF instead of a module BTF.
+ * 
+ * Return: pointer to BTF loaded from kernel or an error pointer.
+ * FD must be closed after BTF is no longer needed. If load_vmlinux is true,
+ * FD can be closed and set to (-1) right away without preventing later usage.
  */
 struct btf *btf_load_next_with_info(__u32 start_id, struct bpf_btf_info *info,
 				    struct btf *base_btf, bool load_vmlinux)
@@ -4705,7 +4714,7 @@ struct btf *btf_load_next_with_info(__u32 start_id, struct bpf_btf_info *info,
 
 		/* filter BTFs */
 		if (!info->kernel_btf ||
-		    (!strcmp((char *)name, "vmlinux")) == !load_vmlinux) {
+		    !strncmp((const char *)name, "vmlinux", name_len) == !load_vmlinux) {
 			close(fd);
 			continue;
 		}
@@ -4714,7 +4723,7 @@ struct btf *btf_load_next_with_info(__u32 start_id, struct bpf_btf_info *info,
 		err = libbpf_get_error(btf);
 		if (err) {
 			pr_warn("failed to load module [%s]'s BTF object #%d: %d\n",
-				(char *)name, id, err);
+				(const char *)name, id, err);
 			goto err_out;
 		}
 
@@ -4731,7 +4740,7 @@ static struct btf *btf_load_vmlinux_from_kernel(void)
 {
 	struct bpf_btf_info info;
 	struct btf *btf;
-	char name[64];
+	char name[BTF_NAME_BUFF_LEN];
 
 	memset(&info, 0, sizeof(info));
 	info.name = ptr_to_u64(name);

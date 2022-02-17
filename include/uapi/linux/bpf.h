@@ -6634,11 +6634,36 @@ struct bpf_core_relo {
 	enum bpf_core_relo_kind kind;
 };
 
-enum {
-	XDP_META_GENERIC_MAGIC = 0xe4a6327d
-};
+	enum {
+		XDP_META_RX_QID_BIT = (0x1 << 9),
+		XDP_META_RX_TSTAMP_BIT = (0x1 << 8),
+		XDP_META_RX_VLAN_TYPE = (0x3 << 6),
+		XDP_META_RX_VLAN_NONE = 0x0,
+		XDP_META_RX_CVID = 0x1,
+		XDP_META_RX_SVID = 0x2,
+		XDP_META_RX_HASH_TYPE = (0x3 << 4),
+		XDP_META_RX_HASH_NONE = 0x0,
+		XDP_META_RX_HASH_L2 = 0x1,
+		XDP_META_RX_HASH_L3 = 0x2,
+		XDP_META_RX_HASH_L4 = 0x3,
+		XDP_META_RX_CSUM_LEVEL = (0x3 << 2),
+		XDP_META_RX_CSUM_STATUS = (0x3 << 0),
+		XDP_META_RX_CSUM_NONE = 0x0,
+		XDP_META_RX_CSUM_OK = 0x1,
+		XDP_META_RX_CSUM_COMP = 0x2,
+	};
 
-#define XDP_META_ALIGN	8
+	enum {
+		XDP_META_TX_VLAN_TYPE = (0x3 << 1),
+		XDP_META_TX_CVID = 0x1,
+		XDP_META_TX_SVID = 0x2,
+		XDP_META_TX_CSUM_BIT = (0x1 << 0),
+	};
+
+	enum {
+		XDP_META_GENERIC_MAGIC = 0xe4a6327d,
+		XDP_META_ALIGN = 8,
+	};
 struct xdp_meta_generic {
 	__u8 padding[4];
 
@@ -6646,22 +6671,6 @@ struct xdp_meta_generic {
 
 	/* Ingress */
 	__le32 rx_flags;
-#define XDP_META_RX_QID_BIT	(0x1 << 9)
-#define XDP_META_RX_TSTAMP_BIT	(0x1 << 8)
-#define XDP_META_RX_VLAN_TYPE	(0x3 << 6)
-#define XDP_META_RX_VLAN_NONE	0x0
-#define XDP_META_RX_CVID	0x1
-#define XDP_META_RX_SVID	0x2
-#define XDP_META_RX_HASH_TYPE	(0x3 << 4)
-#define XDP_META_RX_HASH_NONE	0x0
-#define XDP_META_RX_HASH_L2	0x1
-#define XDP_META_RX_HASH_L3	0x2
-#define XDP_META_RX_HASH_L4	0x3
-#define XDP_META_RX_CSUM_LEVEL	(0x3 << 2)
-#define XDP_META_RX_CSUM_STATUS	(0x3 << 0)
-#define XDP_META_RX_CSUM_NONE	0x0
-#define XDP_META_RX_CSUM_OK	0x1
-#define XDP_META_RX_CSUM_COMP	0x2
 
 	__le16 rx_qid;
 	__le16 rx_vid;
@@ -6672,10 +6681,6 @@ struct xdp_meta_generic {
 	/* Egress */
 
 	__le32 tx_flags;
-#define XDP_META_TX_VLAN_TYPE	(0x3 << 1)
-#define XDP_META_TX_CVID	0x1
-#define XDP_META_TX_SVID	0x2
-#define XDP_META_TX_CSUM_BIT	(0x1 << 0)
 
 	__le16 tx_csum_off;
 	__le16 tx_vid;

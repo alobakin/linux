@@ -2887,6 +2887,8 @@ ice_xdp_setup_prog(struct ice_vsi *vsi, struct bpf_prog *prog,
 			NL_SET_ERR_MSG_MOD(extack, "Could not fill in xdp meta tail");
 			vsi->xdp_metadata_support = false;
 		}
+	} else {
+		vsi->xdp_metadata_support = false;
 	}
 
 	if (!ice_is_xdp_ena_vsi(vsi) && prog) {

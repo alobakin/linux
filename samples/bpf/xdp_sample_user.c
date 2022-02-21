@@ -1296,6 +1296,7 @@ int sample_install_xdp(struct bpf_program *xdp_prog,
 
 	xdp_flags |= !opts->force ? XDP_FLAGS_UPDATE_IF_NOEXIST : 0;
 	xdp_flags |= opts->generic ? XDP_FLAGS_SKB_MODE : XDP_FLAGS_DRV_MODE;
+	xdp_flags |= opts->use_meta ? XDP_FLAGS_USE_METADATA : 0;
 	ret = bpf_xdp_attach(ifindex, bpf_program__fd(xdp_prog), xdp_flags, NULL);
 	if (ret < 0) {
 		ret = -errno;

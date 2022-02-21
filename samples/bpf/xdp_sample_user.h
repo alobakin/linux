@@ -34,6 +34,7 @@ struct install_opts {
 	int ifindex;
 	__u32 force:1;
 	__u32 generic:1;
+	__u32 use_meta:1;
 };
 
 int sample_setup_maps(struct bpf_map **maps);

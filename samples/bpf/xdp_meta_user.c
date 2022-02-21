@@ -12,6 +12,11 @@
  * modify it under the terms of version 2 of the GNU General Public
  * License as published by the Free Software Foundation.
  */
+
+static const char *__doc__=
+	"Sample prints out generic hints (built by NIC driver) for every ingress packet.\n"
+	"Noflag option (-n) disables metadata XDP flag (for NIC driver testing).\n";
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdbool.h>
@@ -26,6 +31,8 @@
 #include <bpf/bpf.h>
 #include <bpf/libbpf.h>
 #include <linux/if_link.h>
+#include <getopt.h>
+#include "xdp_sample_user.h"
 #include "xdp_meta.skel.h"
 
 #define DEBUGFS "/sys/kernel/debug/tracing/"
@@ -36,6 +43,15 @@ static void xdp_meta_sample_stop(int signo)
 {
 	xdp_meta_sample_running = false;
 }
+
+static int mask = 0;
+
+static const struct option long_options[] = {
+	{"interface", required_argument, NULL, 'i' },
+	{"force", no_argument, NULL, 'f'},
+	{"noflag", no_argument, NULL, 'n'},
+	{}
+};
 
 /* Had to change the standard read_trace_pipe from trace_helpers.h */
 static void xdp_meta_read_trace_pipe(void)
@@ -62,21 +78,39 @@ static void xdp_meta_read_trace_pipe(void)
 
 int main(int argc, char **argv)
 {
-	__u32 xdp_flags = XDP_FLAGS_UPDATE_IF_NOEXIST | XDP_FLAGS_USE_METADATA;
-	__u32 prog_id, prog_fd, running_prog_id;
-	struct xdp_meta *skel;
-	int ifindex, ret = 1;
+	int ret = EXIT_FAIL_OPTION, opt;
 	struct sigaction handle_ctrl_c;
+	struct install_opts opts = {
+		.use_meta = true,
+	};
+	struct xdp_meta *skel;
+	bool error = true;
 
-	if (argc == optind)
-		return ret;
-
-	ifindex = if_nametoindex(argv[optind]);
-	if (!ifindex)
-		ifindex = strtoul(argv[optind], NULL, 0);
-	if (!ifindex) {
-		fprintf(stderr, "Bad interface index or name\n");
-		goto end;
+	/* Parse commands line args */
+	while ((opt = getopt_long(argc, argv, "i:nf",
+				  long_options, NULL)) != -1) {
+		switch (opt) {
+		case 'i':
+			opts.ifindex = if_nametoindex(optarg);
+			if (!opts.ifindex) {
+				opts.ifindex = strtoul(optarg, NULL, 0);
+			}
+			if (!opts.ifindex) {
+				fprintf(stderr, "Bad interface index or name\n");
+				goto arg_exit;
+			}
+			break;
+		case 'f':
+			opts.force = true;
+			break;
+		case 'n':
+			opts.use_meta = false;
+			break;
+arg_exit:
+		default:
+			sample_usage(argv, long_options, __doc__, mask, error);
+			return ret;
+		}
 	}
 
 	skel = xdp_meta__open();
@@ -94,17 +128,7 @@ int main(int argc, char **argv)
 		goto end_destroy;
 	}
 
-	ret = 1;
-	prog_fd = bpf_program__fd(skel->progs.xdp_meta_prog);
-	if (bpf_set_link_xdp_fd(ifindex, prog_fd, xdp_flags) < 0) {
-		fprintf(stderr, "Failed to set xdp link\n");
-		goto end_destroy;
-	}
-
-	if (bpf_get_link_xdp_id(ifindex, &prog_id, xdp_flags)) {
-		fprintf(stderr, "Failed to get XDP program id for ifindex\n");
-		goto end_destroy;
-	}
+	ret = sample_install_xdp(skel->progs.xdp_meta_prog, &opts);
 
 	memset(&handle_ctrl_c, 0, sizeof(handle_ctrl_c));
 	handle_ctrl_c.sa_handler = &xdp_meta_sample_stop;
@@ -112,20 +136,9 @@ int main(int argc, char **argv)
 
 	xdp_meta_read_trace_pipe();
 
-	ret = 0;
-
-	if (bpf_get_link_xdp_id(ifindex, &running_prog_id, xdp_flags) ||
-	    running_prog_id != prog_id) {
-		fprintf(stderr,
-			"Failed to get the running XDP program id or another program is running. Exit without detaching.\n");
-		goto end_destroy;
-	}
-
-	fprintf(stderr, "Detaching the program...\n");
-	bpf_set_link_xdp_fd(ifindex, -1, 0);
-
 end_destroy:
 	xdp_meta__destroy(skel);
 end:
+	sample_exit(ret);
 	return ret;
 }

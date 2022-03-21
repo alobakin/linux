@@ -4740,7 +4740,7 @@ static struct btf *btf_load_vmlinux_from_kernel(void)
 {
 	struct bpf_btf_info info;
 	struct btf *btf;
-	char name[BTF_NAME_BUFF_LEN];
+	char name[BTF_NAME_BUFF_LEN] = "";
 
 	memset(&info, 0, sizeof(info));
 	info.name = ptr_to_u64(name);

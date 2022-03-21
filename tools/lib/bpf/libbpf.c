@@ -5280,7 +5280,7 @@ static int load_module_btfs(struct bpf_object *obj)
 	struct module_btf *mod_btf;
 	struct bpf_btf_info info;
 	struct btf *btf;
-	char name[BTF_NAME_BUFF_LEN];
+	char name[BTF_NAME_BUFF_LEN] = "";
 	__u32 id = 0;
 	int err, fd;
 

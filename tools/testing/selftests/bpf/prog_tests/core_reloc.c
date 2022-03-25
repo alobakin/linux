@@ -758,8 +758,8 @@ static const struct core_reloc_test_case test_cases[] = {
 		.ub7 = 96,
 		.sb4 = -7,
 		.sb20 = -0x76543,
-		.u32 = 0x80000000,
-		.s32 = -0x76543210,
+		.__u32 = 0x80000000,
+		.__s32 = -0x76543210,
 	}),
 	BITFIELDS_CASE(bitfields___bit_sz_change, {
 		.ub1 = 6,
@@ -767,8 +767,8 @@ static const struct core_reloc_test_case test_cases[] = {
 		.ub7 = 1,
 		.sb4 = -1,
 		.sb20 = -0x17654321,
-		.u32 = 0xBEEF,
-		.s32 = -0x3FEDCBA987654321LL,
+		.__u32 = 0xBEEF,
+		.__s32 = -0x3FEDCBA987654321LL,
 	}),
 	BITFIELDS_CASE(bitfields___bitfield_vs_int, {
 		.ub1 = 0xFEDCBA9876543210LL,
@@ -776,8 +776,8 @@ static const struct core_reloc_test_case test_cases[] = {
 		.ub7 = -0x7EDCBA987654321LL,
 		.sb4 = -0x6123456789ABCDELL,
 		.sb20 = 0xD00DLL,
-		.u32 = -0x76543,
-		.s32 = 0x0ADEADBEEFBADB0BLL,
+		.__u32 = -0x76543,
+		.__s32 = 0x0ADEADBEEFBADB0BLL,
 	}),
 	BITFIELDS_CASE(bitfields___just_big_enough, {
 		.ub1 = 0xFLL,

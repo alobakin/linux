@@ -725,8 +725,8 @@ struct core_reloc_bitfields_output {
 	int64_t		ub7;
 	int64_t		sb4;
 	int64_t		sb20;
-	int64_t		u32;
-	int64_t		s32;
+	int64_t		__u32;
+	int64_t		__s32;
 };
 
 struct core_reloc_bitfields {
@@ -738,8 +738,8 @@ struct core_reloc_bitfields {
 	int8_t		sb4: 4;
 	int32_t		sb20: 20;
 	/* non-bitfields */
-	uint32_t	u32;
-	int32_t		s32;
+	uint32_t	__u32;
+	int32_t		__s32;
 };
 
 /* different bit sizes (both up and down) */
@@ -752,8 +752,8 @@ struct core_reloc_bitfields___bit_sz_change {
 	int8_t		sb4: 1;		/*  4 ->  1 */
 	int32_t		sb20: 30;	/* 20 -> 30 */
 	/* non-bitfields */
-	uint16_t	u32;			/* 32 -> 16 */
-	int64_t		s32 __bpf_aligned;	/* 32 -> 64 */
+	uint16_t	__u32;			/* 32 -> 16 */
+	int64_t		__s32 __bpf_aligned;	/* 32 -> 64 */
 };
 
 /* turn bitfield into non-bitfield and vice versa */
@@ -763,8 +763,8 @@ struct core_reloc_bitfields___bitfield_vs_int {
 	int64_t		ub7 __bpf_aligned;	/*  7 -> 64 non-bitfield signed */
 	int64_t		sb4 __bpf_aligned;	/*  4 -> 64 non-bitfield signed */
 	uint64_t	sb20 __bpf_aligned;	/* 20 -> 16 non-bitfield unsigned */
-	int32_t		u32: 20;		/* 32 non-bitfield -> 20 bitfield */
-	uint64_t	s32: 60 __bpf_aligned;	/* 32 non-bitfield -> 60 bitfield */
+	int32_t		__u32: 20;			/* 32 non-bitfield -> 20 bitfield */
+	uint64_t	__s32: 60 __bpf_aligned;	/* 32 non-bitfield -> 60 bitfield */
 };
 
 struct core_reloc_bitfields___just_big_enough {
@@ -773,8 +773,8 @@ struct core_reloc_bitfields___just_big_enough {
 	uint32_t	ub7;
 	uint32_t	sb4;
 	uint32_t	sb20;
-	uint32_t	u32;
-	uint32_t	s32;
+	uint32_t	__u32;
+	uint32_t	__s32;
 } __attribute__((packed)) ;
 
 struct core_reloc_bitfields___err_too_big_bitfield {
@@ -783,8 +783,8 @@ struct core_reloc_bitfields___err_too_big_bitfield {
 	uint32_t	ub7;
 	uint32_t	sb4;
 	uint32_t	sb20;
-	uint32_t	u32;
-	uint32_t	s32;
+	uint32_t	__u32;
+	uint32_t	__s32;
 } __attribute__((packed)) ;
 
 /*

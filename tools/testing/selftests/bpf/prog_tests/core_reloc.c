@@ -2,6 +2,7 @@
 #include <test_progs.h>
 #include "progs/core_reloc_types.h"
 #include "bpf_testmod/bpf_testmod.h"
+#include "bpf/libbpf_internal.h"
 #include <linux/limits.h>
 #include <sys/mman.h>
 #include <sys/syscall.h>
@@ -11,28 +12,37 @@ static int duration = 0;
 
 #define STRUCT_TO_CHAR_PTR(struct_name) (const char *)&(struct struct_name)
 
-#define MODULES_CASE(name, pg_name, tp_name) {				\
+#define MODULES_OUTPUT STRUCT_TO_CHAR_PTR(core_reloc_module_output) {	\
+	.read_ctx_sz = sizeof(struct bpf_testmod_test_read_ctx),	\
+	.read_ctx_exists = true,					\
+	.buf_exists = true,						\
+	.len_exists = true,						\
+	.off_exists = true,						\
+	.len = 123,							\
+	.off = 0,							\
+	.comm = "test_progs",						\
+	.comm_len = sizeof("test_progs"),				\
+},									\
+.output_len = sizeof(struct core_reloc_module_output)
+
+#define MODULES_ID_OUTPUT STRUCT_TO_CHAR_PTR(core_reloc_mod_id_output) {\
+	.comm = "test_progs",						\
+	.comm_len = sizeof("test_progs"),				\
+},									\
+.output_len = sizeof(struct core_reloc_mod_id_output)
+
+#define MODULES_CASE(name, pg_name, tp_name, expected_out, setup_fn) {	\
 	.case_name = name,						\
 	.bpf_obj_file = "test_core_reloc_module.o",			\
 	.btf_src_file = NULL, /* find in kernel module BTFs */		\
 	.input = "",							\
 	.input_len = 0,							\
-	.output = STRUCT_TO_CHAR_PTR(core_reloc_module_output) {	\
-		.read_ctx_sz = sizeof(struct bpf_testmod_test_read_ctx),\
-		.read_ctx_exists = true,				\
-		.buf_exists = true,					\
-		.len_exists = true,					\
-		.off_exists = true,					\
-		.len = 123,						\
-		.off = 0,						\
-		.comm = "test_progs",					\
-		.comm_len = sizeof("test_progs"),			\
-	},								\
-	.output_len = sizeof(struct core_reloc_module_output),		\
+	.output = expected_out,						\
 	.prog_name = pg_name,						\
 	.raw_tp_name = tp_name,						\
 	.trigger = __trigger_module_test_read,				\
 	.needs_testmod = true,						\
+	.setup = setup_fn,						\
 }
 
 #define FLAVORS_DATA(struct_name) STRUCT_TO_CHAR_PTR(struct_name) {	\
@@ -377,6 +387,37 @@ struct core_reloc_test_case {
 	trigger_test_fn trigger;
 };
 
+static struct btf *find_module_btf(const char *name, struct btf *vmlinux_btf)
+{
+	struct bpf_btf_info info;
+	__u32 id = 0;
+	struct btf *btf;
+	char name_buff[64] = "";
+	bool is_vmlinux = strncmp(name, "vmlinux", sizeof("vmlinux")) == 0;
+
+	while (true) {
+		memset(&info, 0, sizeof(info));
+		info.name = ptr_to_u64(name_buff);
+		info.name_len = sizeof(name_buff);
+
+		btf = btf_load_next_with_info(id, &info, vmlinux_btf, is_vmlinux);
+		if (CHECK(!btf || IS_ERR(btf), "btf_load_next_with_info",
+			  "can't get BTF and/or info: %s, vmlinux? %d \n", strerror(errno), (int)is_vmlinux))
+			return ERR_PTR(-1);
+
+		if (info.name_len < 1 || strncmp(name_buff, name, info.name_len) != 0)
+			goto skip;
+
+		return btf;
+skip:
+		id = btf_obj_id(btf);
+		btf__free(btf);
+	}
+
+	PRINT_FAIL("could not find the bpf_testmod BTF\n");
+	return ERR_PTR(-1);
+}
+
 static int find_btf_type(const struct btf *btf, const char *name, __u32 kind)
 {
 	int id;
@@ -386,6 +427,30 @@ static int find_btf_type(const struct btf *btf, const char *name, __u32 kind)
 		return -1;
 
 	return id;
+}
+
+static int setup_module_id_case(struct core_reloc_test_case *test)
+{
+	struct core_reloc_mod_id_output *exp = (void *)test->output;
+	struct btf *vmlinux_btf, *testmod_btf;
+	int ret = -1;
+
+	vmlinux_btf = find_module_btf("vmlinux", NULL);
+	testmod_btf = find_module_btf("bpf_testmod", vmlinux_btf);
+
+	if (IS_ERR(testmod_btf) || !testmod_btf)
+		goto free_vmlinux;
+
+	exp->testmod_btf_obj_id = btf_obj_id(testmod_btf);
+	exp->testmod_type_id = find_btf_type(testmod_btf, "bpf_testmod_test_read_ctx",
+					     BTF_KIND_STRUCT);
+	if (exp->testmod_type_id >= 0)
+		ret = 0;
+
+	btf__free(testmod_btf);
+free_vmlinux:
+	btf__free(vmlinux_btf);
+	return ret;
 }
 
 static int setup_type_id_case_local(struct core_reloc_test_case *test)
@@ -531,8 +596,14 @@ static const struct core_reloc_test_case test_cases[] = {
 	},
 
 	/* validate we can find kernel module BTF types for relocs/attach */
-	MODULES_CASE("module_probed", "test_core_module_probed", "bpf_testmod_test_read"),
-	MODULES_CASE("module_direct", "test_core_module_direct", NULL),
+	MODULES_CASE("module_probed", "test_core_module_probed", "bpf_testmod_test_read",
+		     MODULES_OUTPUT, NULL),
+	MODULES_CASE("module_direct", "test_core_module_direct", NULL,
+		     MODULES_OUTPUT, NULL),
+	MODULES_CASE("module_type_id_probed", "test_core_module_id_probed", "bpf_testmod_test_read",
+		     MODULES_ID_OUTPUT, setup_module_id_case),
+	MODULES_CASE("module_type_id_direct", "test_core_module_id_direct", NULL,
+		     MODULES_ID_OUTPUT, setup_module_id_case),
 
 	/* validate BPF program can use multiple flavors to match against
 	 * single target BTF type

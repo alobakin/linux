@@ -32,6 +32,13 @@ struct core_reloc_module_output {
 	int comm_len;
 };
 
+struct core_reloc_mod_id_output {
+	int testmod_btf_obj_id;
+	int testmod_type_id;
+	char comm[sizeof("test_progs")];
+	int comm_len;
+};
+
 /*
  * FLAVORS
  */

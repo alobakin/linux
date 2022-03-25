@@ -35,6 +35,13 @@ struct core_reloc_module_output {
 	int comm_len;
 };
 
+struct core_reloc_mod_id_output {
+	int testmod_btf_obj_id;
+	int testmod_type_id;
+	char comm[sizeof("test_progs")];
+	int comm_len;
+};
+
 SEC("raw_tp/bpf_testmod_test_read")
 int BPF_PROG(test_core_module_probed,
 	     struct task_struct *task,
@@ -94,6 +101,48 @@ int BPF_PROG(test_core_module_direct,
 	out->buf_exists = bpf_core_field_exists(read_ctx->buf);
 	out->off_exists = bpf_core_field_exists(read_ctx->off);
 	out->len_exists = bpf_core_field_exists(read_ctx->len);
+
+	out->comm_len = BPF_CORE_READ_STR_INTO(&out->comm, task, comm);
+#else
+	data.skip = true;
+#endif
+
+	return 0;
+}
+
+SEC("raw_tp/bpf_testmod_test_read")
+int BPF_PROG(test_core_module_id_probed,
+	     struct task_struct *task,
+	     struct bpf_testmod_test_read_ctx *read_ctx)
+{
+#if __has_builtin(__builtin_preserve_enum_value)
+	struct core_reloc_mod_id_output *out = (void *)&data.out;
+	u64 full_btf_id;
+	
+	full_btf_id = bpf_core_type_id_kernel(struct bpf_testmod_test_read_ctx);
+	out->testmod_btf_obj_id = full_btf_id >> 32;
+	out->testmod_type_id = full_btf_id & 0xFFFFFFFF;
+
+	out->comm_len = BPF_CORE_READ_STR_INTO(&out->comm, task, comm);
+#else
+	data.skip = true;
+#endif
+
+	return 0;
+}
+
+SEC("tp_btf/bpf_testmod_test_read")
+int BPF_PROG(test_core_module_id_direct,
+	     struct task_struct *task,
+	     struct bpf_testmod_test_read_ctx *read_ctx)
+{
+#if __has_builtin(__builtin_preserve_enum_value)
+	struct core_reloc_mod_id_output *out = (void *)&data.out;
+	u64 full_btf_id;
+	
+	full_btf_id = bpf_core_type_id_kernel(struct bpf_testmod_test_read_ctx);
+	out->testmod_btf_obj_id = full_btf_id >> 32;
+	out->testmod_type_id = full_btf_id & 0xFFFFFFFF;
 
 	out->comm_len = BPF_CORE_READ_STR_INTO(&out->comm, task, comm);
 #else

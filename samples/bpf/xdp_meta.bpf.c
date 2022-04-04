@@ -13,13 +13,16 @@
 #include <bpf/bpf_tracing.h>
 #include <bpf/bpf_core_read.h>
 #include <bpf/bpf_helpers.h>
+#include <bpf/bpf_endian.h>
 
-struct ice_aqc_generic___min {
-	__le32 param0;
-	__le32 param1;
-	__le32 addr_high;
-	__le32 addr_low;
-};
+# define __force	__attribute__((force))
+
+#define BITFIELD_GET(_mask, _reg)						\
+({										\
+	(typeof(_mask))(((_reg) & (_mask)) >> (__builtin_ffsll(_mask) - 1));	\
+})
+
+#define BITFIELD_GET_META(_mask, _reg) BITFIELD_GET(_mask, __bpf_le32_to_cpu(_reg))
 
 SEC("xdp")
 int xdp_meta_prog(struct xdp_md *ctx)
@@ -27,8 +30,9 @@ int xdp_meta_prog(struct xdp_md *ctx)
 	struct xdp_meta_generic *data_meta = (void *)(long)ctx->data_meta;
 	void *data_end = (void *)(long)ctx->data_end;
 	void *data = (void *)(long)ctx->data;
+	u16 vlan_type, hash_type, csum_level, csum_status;
 	u32 type_id_meta, btf_id_meta, magic_meta;
-	u64 btf_id_libbpf, btf_id_ice;
+	u64 btf_id_libbpf;
 	u16 rxcvid;
 	u32 hash;
 
@@ -57,13 +61,40 @@ int xdp_meta_prog(struct xdp_md *ctx)
 	else
 		bpf_printk("Received meta type is unknown\n");
 
-	btf_id_ice = bpf_core_type_id_kernel(struct ice_aqc_generic___min);
-	bpf_printk("ice_aqc_generic type id %u, ice BTF id %u\n",
-		   btf_id_ice & 0xFFFFFFFF, btf_id_ice >> 32);
+	if (BITFIELD_GET_META(XDP_META_RX_QID_BIT, data_meta->rx_flags))
+		bpf_printk("RX queue ID: %d\n", __bpf_le32_to_cpu(data_meta->rx_qid));
+	else
+		bpf_printk("RX queue ID not present\n");
 
-	hash = BPF_CORE_READ(data_meta, rx_hash);
-	rxcvid = BPF_CORE_READ(data_meta, rx_vid);
-	bpf_printk("Metadata. Hash: 0x%x, VID: %d\n", hash, rxcvid);
+	if (BITFIELD_GET_META(XDP_META_RX_TSTAMP_BIT, data_meta->rx_flags))
+		bpf_printk("RX timestamp: %d\n", __bpf_le32_to_cpu(data_meta->rx_tstamp));
+	else
+		bpf_printk("RX timestamp not present\n");
+
+	vlan_type = BITFIELD_GET_META(XDP_META_RX_VLAN_TYPE, data_meta->rx_flags);
+	if (vlan_type)
+		bpf_printk("RX VLAN type: %s, VLAN ID: %d",
+			   vlan_type == XDP_META_RX_CVID ? "customer" : "service",
+			   __bpf_le32_to_cpu(data_meta->rx_vid));
+	else
+		bpf_printk("No VLAN detected\n");
+
+	hash_type = BITFIELD_GET_META(XDP_META_RX_HASH_TYPE, data_meta->rx_flags);
+	if (hash_type)
+		bpf_printk("RX hash type: L%d, hash value: 0x%x\n",
+			   hash_type + 1, __bpf_le32_to_cpu(data_meta->rx_hash));
+	else
+		bpf_printk("RX hash not present\n");
+
+	csum_level = BITFIELD_GET_META(XDP_META_RX_CSUM_LEVEL, data_meta->rx_flags);
+	csum_status = BITFIELD_GET_META(XDP_META_RX_CSUM_STATUS, data_meta->rx_flags);
+	if (csum_status == XDP_META_RX_CSUM_COMP)
+		bpf_printk("L%d checksum is: 0x%x\n", csum_level,
+			   __bpf_le32_to_cpu(data_meta->rx_csum));
+	else if (csum_status == XDP_META_RX_CSUM_OK)
+		bpf_printk("L%d checksum was checked\n", csum_level);
+	else
+		bpf_printk("Checksum information was not provided\n");
 
 	return XDP_PASS;
 }

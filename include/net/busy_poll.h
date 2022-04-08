@@ -122,16 +122,21 @@ static inline void sk_busy_loop(struct sock *sk, int nonblock)
 }
 
 /* used in the NIC receive handler to mark the skb */
-static inline void skb_mark_napi_id(struct sk_buff *skb,
-				    struct napi_struct *napi)
+static inline void __skb_mark_napi_id(struct sk_buff *skb, u32 napi_id)
 {
 #ifdef CONFIG_NET_RX_BUSY_POLL
 	/* If the skb was already marked with a valid NAPI ID, avoid overwriting
 	 * it.
 	 */
 	if (skb->napi_id < MIN_NAPI_ID)
-		skb->napi_id = napi->napi_id;
+		skb->napi_id = napi_id;
 #endif
+}
+
+static inline void skb_mark_napi_id(struct sk_buff *skb,
+				    struct napi_struct *napi)
+{
+	__skb_mark_napi_id(skb, napi->napi_id);
 }
 
 /* used in the protocol handler to propagate the napi_id to the socket */

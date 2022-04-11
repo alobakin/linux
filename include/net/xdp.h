@@ -404,7 +404,7 @@ xdp_data_meta_unsupported(const struct xdp_buff *xdp)
 
 static inline bool xdp_metalen_invalid(unsigned long metalen)
 {
-	return (metalen & (sizeof(__u32) - 1)) || (metalen > 32);
+	return (metalen & (sizeof(__u32) - 1)) || (metalen > 256);
 }
 
 struct xdp_attachment_info {

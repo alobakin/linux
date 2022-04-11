@@ -33,25 +33,41 @@ int xdp_meta_prog(struct xdp_md *ctx)
 	u16 vlan_type, hash_type, csum_level, csum_status;
 	u32 type_id_meta, btf_id_meta, magic_meta;
 	u64 btf_id_libbpf;
-	u16 rxcvid;
-	u32 hash;
+	s64 offset;
+	s32 ret;
 
 	if (data_meta + 1 > data) {
-		bpf_printk("data_meta space is not sufficient for generic metadata, should be %ld, is %ld\n",
+		bpf_printk("Driver did not provide metadata: data_meta space is not sufficient for generic metadata, should be %ld, is %ld\n",
 			   sizeof(struct xdp_meta_generic), (long)data - (long)data_meta);
 		return XDP_DROP;
 	}
 
-	bpf_probe_read_kernel(&magic_meta, sizeof(magic_meta), (void *)data - 4);
+	offset = (s64)data - (s64)(void *)data_meta - sizeof(struct xdp_meta_generic);
+	ret = bpf_xdp_adjust_meta(ctx, offset);
+	if (ret < 0) {
+		bpf_printk("Could not adjust meta, offset: %ld, error: %d\n", offset, ret);
+		return XDP_DROP;
+	}
+
+	data_meta = (void *)(long)ctx->data_meta;
+	data_end = (void *)(long)ctx->data_end;
+	data = (void *)(long)ctx->data;
+	if (data_meta + 1 > data) {
+		bpf_printk("Meta was not properly adjusted: data_meta space is not sufficient for generic metadata, should be %ld, is %ld\n",
+			   sizeof(struct xdp_meta_generic), (long)data - (long)data_meta);
+		return XDP_DROP;
+	}
+
+	magic_meta =  __bpf_le32_to_cpu(data_meta->magic);
 	if (magic_meta != XDP_META_GENERIC_MAGIC) {
-		bpf_printk("meta des not contain generic hints, based on received magic: 0x%x\n",
+		bpf_printk("Meta des not contain generic hints, based on received magic: 0x%x\n",
 			   magic_meta);
 		return XDP_DROP;
 	}
 
 	btf_id_libbpf = bpf_core_type_id_kernel(struct xdp_meta_generic);
-	bpf_probe_read_kernel(&type_id_meta, sizeof(type_id_meta), (void *)data - 8);
-	bpf_probe_read_kernel(&btf_id_meta, sizeof(btf_id_meta), (void *)data - 12);
+	type_id_meta =  __bpf_le32_to_cpu(data_meta->type_id);
+	btf_id_meta =  __bpf_le32_to_cpu(data_meta->btf_id);
 
 	bpf_printk("id from libbpf %u (module BTF id: %u), id from hints metadata %u (module BTF id: %u)\n",
 		   btf_id_libbpf & 0xFFFFFFFF, btf_id_libbpf >> 32, type_id_meta, btf_id_meta);

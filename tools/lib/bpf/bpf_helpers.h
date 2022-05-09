@@ -259,4 +259,31 @@ enum libbpf_tristate {
 /* Helper macro to print out debug messages */
 #define bpf_printk(fmt, args...) ___bpf_pick_printk(args)(fmt, ##args)
 
+static __always_inline void *
+get_mem_ptr_with_var_offset(__u32 mem_ptr, __u32 mem_end, __u64 off, const __u64 len)
+{
+	void *from, *ret;
+
+	/* LLVM tends to generate code that verifier doesn't understand,
+	 * so in order to access data or data_meta with a calculated variable
+	 * offset (e.g. to read last N bytes), asm code is needed
+	 */
+	asm volatile("r1 = %[start]\n\t"
+		     "r2 = %[end]\n\t"
+		     "%[off] &= %[offmax]\n\t"
+		     "r1 += %[off]\n\t"
+		     "%[from] = r1\n\t"
+		     "r1 += %[len]\n\t"
+		     "if r1 > r2 goto +2\n\t"
+		     "%[ret] = %[from]\n\t"
+		     "goto +1\n\t"
+		     "%[ret] = %[null]\n\t"
+		     : [ret]"=r"(ret), [from]"=r"(from)
+		     : [start]"r"(mem_ptr), [end]"r"(mem_end), [off]"r"(off), [len]"ri"(len),
+		       [offmax]"i"(0xff), [null]"i"(NULL)
+		     : "r1", "r2");
+
+	return ret;
+}
+
 #endif

@@ -262,7 +262,7 @@ enum libbpf_tristate {
 static __always_inline void *
 get_mem_ptr_with_var_offset(__u32 mem_ptr, __u32 mem_end, __u64 off, const __u64 len)
 {
-	void *from, *ret;
+	void *ret;
 
 	/* LLVM tends to generate code that verifier doesn't understand,
 	 * so in order to access data or data_meta with a calculated variable
@@ -272,13 +272,12 @@ get_mem_ptr_with_var_offset(__u32 mem_ptr, __u32 mem_end, __u64 off, const __u64
 		     "r2 = %[end]\n\t"
 		     "%[off] &= %[offmax]\n\t"
 		     "r1 += %[off]\n\t"
-		     "%[from] = r1\n\t"
+		     "%[ret] = r1\n\t"
 		     "r1 += %[len]\n\t"
-		     "if r1 > r2 goto +2\n\t"
-		     "%[ret] = %[from]\n\t"
+		     "if r1 > r2 goto +1\n\t"
 		     "goto +1\n\t"
 		     "%[ret] = %[null]\n\t"
-		     : [ret]"=r"(ret), [from]"=r"(from)
+		     : [ret]"=r"(ret)
 		     : [start]"r"(mem_ptr), [end]"r"(mem_end), [off]"r"(off), [len]"ri"(len),
 		       [offmax]"i"(0xff), [null]"i"(NULL)
 		     : "r1", "r2");

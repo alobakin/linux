@@ -27,22 +27,23 @@
 SEC("xdp")
 int xdp_meta_prog(struct xdp_md *ctx)
 {
-	struct xdp_meta_generic *data_meta = (void *)(long)ctx->data_meta;
-	void *data_end = (void *)(long)ctx->data_end;
-	void *data = (void *)(long)ctx->data;
 	u16 vlan_type, hash_type, csum_level, csum_status;
-	u32 type_id_meta, btf_id_meta, magic_meta;
+	u32 type_id_meta, btf_id_meta, magic_meta, offset;
+	struct xdp_meta_generic *data_meta;
 	u64 btf_id_libbpf;
-	u16 rxcvid;
-	u32 hash;
 
-	if (data_meta + 1 > data) {
-		bpf_printk("data_meta space is not sufficient for generic metadata, should be %ld, is %ld\n",
-			   sizeof(struct xdp_meta_generic), (long)data - (long)data_meta);
+	offset = ctx->data - ctx->data_meta;
+	data_meta = get_mem_ptr_with_var_offset(ctx->data_meta, ctx->data,
+						offset - sizeof(struct xdp_meta_generic),
+						sizeof(struct xdp_meta_generic));
+	if (!data_meta) {
+		bpf_printk("could not obtain generic meta pointer\n");
+		bpf_printk("space between data_meta and data should be %ld, is %d\n",
+			   sizeof(struct xdp_meta_generic), ctx->data - ctx->data_meta);
 		return XDP_DROP;
 	}
 
-	bpf_probe_read_kernel(&magic_meta, sizeof(magic_meta), (void *)data - 4);
+	magic_meta = data_meta->magic;
 	if (magic_meta != XDP_META_GENERIC_MAGIC) {
 		bpf_printk("meta des not contain generic hints, based on received magic: 0x%x\n",
 			   magic_meta);
@@ -50,16 +51,18 @@ int xdp_meta_prog(struct xdp_md *ctx)
 	}
 
 	btf_id_libbpf = bpf_core_type_id_kernel(struct xdp_meta_generic);
-	bpf_probe_read_kernel(&type_id_meta, sizeof(type_id_meta), (void *)data - 8);
-	bpf_probe_read_kernel(&btf_id_meta, sizeof(btf_id_meta), (void *)data - 12);
+	type_id_meta = data_meta->type_id;
+	btf_id_meta = data_meta->btf_id;
 
 	bpf_printk("id from libbpf %u (module BTF id: %u), id from hints metadata %u (module BTF id: %u)\n",
 		   btf_id_libbpf & 0xFFFFFFFF, btf_id_libbpf >> 32, type_id_meta, btf_id_meta);
 
-	if (btf_id_libbpf == (((u64)btf_id_meta << 32) | type_id_meta))
+	if (btf_id_libbpf == (((u64)btf_id_meta << 32) | type_id_meta)) {
 		bpf_printk("Received meta is generic\n");
-	else
+	} else {
 		bpf_printk("Received meta type is unknown\n");
+		return XDP_DROP;
+	}
 
 	if (BITFIELD_GET_META(XDP_META_RX_QID_BIT, data_meta->rx_flags))
 		bpf_printk("RX queue ID: %d\n", __bpf_le32_to_cpu(data_meta->rx_qid));

@@ -22,20 +22,28 @@
 	(typeof(_mask))(((_reg) & (_mask)) >> (__builtin_ffsll(_mask) - 1));	\
 })
 
-#define BITFIELD_GET_META(_mask, _reg) BITFIELD_GET(_mask, __bpf_le32_to_cpu(_reg))
+#define GET_BTF_OBJ_ID(_full_id)						\
+({										\
+	_full_id >> 32;								\
+})
+
+#define GET_BTF_TYPE_ID(_full_id)						\
+({										\
+	_full_id & 0xFFFFFFFF;							\
+})
 
 SEC("xdp")
 int xdp_meta_prog(struct xdp_md *ctx)
 {
 	u16 vlan_type, hash_type, csum_level, csum_status;
-	u32 type_id_meta, btf_id_meta, magic_meta, offset;
 	struct xdp_meta_generic *data_meta;
-	u64 btf_id_libbpf;
+	u32 magic_meta, offset, rx_flags;
+	u64 btf_id_libbpf, btf_id_hints;
 
 	offset = ctx->data - ctx->data_meta;
-	data_meta = get_mem_ptr_with_var_offset(ctx->data_meta, ctx->data,
-						offset - sizeof(struct xdp_meta_generic),
-						sizeof(struct xdp_meta_generic));
+	data_meta = bpf_access_mem(ctx->data_meta, ctx->data,
+				   offset - sizeof(struct xdp_meta_generic),
+				   sizeof(struct xdp_meta_generic));
 	if (!data_meta) {
 		bpf_printk("could not obtain generic meta pointer\n");
 		bpf_printk("space between data_meta and data should be %ld, is %d\n",
@@ -43,7 +51,7 @@ int xdp_meta_prog(struct xdp_md *ctx)
 		return XDP_DROP;
 	}
 
-	magic_meta = data_meta->magic;
+	magic_meta = __bpf_le32_to_cpu(data_meta->magic);
 	if (magic_meta != XDP_META_GENERIC_MAGIC) {
 		bpf_printk("meta des not contain generic hints, based on received magic: 0x%x\n",
 			   magic_meta);
@@ -51,46 +59,47 @@ int xdp_meta_prog(struct xdp_md *ctx)
 	}
 
 	btf_id_libbpf = bpf_core_type_id_kernel(struct xdp_meta_generic);
-	type_id_meta = data_meta->type_id;
-	btf_id_meta = data_meta->btf_id;
+	btf_id_hints = __bpf_le64_to_cpu(data_meta->full_id);
 
 	bpf_printk("id from libbpf %u (module BTF id: %u), id from hints metadata %u (module BTF id: %u)\n",
-		   btf_id_libbpf & 0xFFFFFFFF, btf_id_libbpf >> 32, type_id_meta, btf_id_meta);
+		   GET_BTF_TYPE_ID(btf_id_libbpf), GET_BTF_OBJ_ID(btf_id_libbpf),
+		   GET_BTF_TYPE_ID(btf_id_hints), GET_BTF_OBJ_ID(btf_id_hints));
 
-	if (btf_id_libbpf == (((u64)btf_id_meta << 32) | type_id_meta)) {
+	if (btf_id_libbpf == btf_id_hints) {
 		bpf_printk("Received meta is generic\n");
 	} else {
 		bpf_printk("Received meta type is unknown\n");
 		return XDP_DROP;
 	}
 
-	if (BITFIELD_GET_META(XDP_META_RX_QID_BIT, data_meta->rx_flags))
-		bpf_printk("RX queue ID: %d\n", __bpf_le32_to_cpu(data_meta->rx_qid));
+	rx_flags = __bpf_le32_to_cpu(data_meta->rx_flags);
+	if (BITFIELD_GET(XDP_META_RX_QID_PRESENT, rx_flags))
+		bpf_printk("RX queue ID: %d\n", __bpf_le16_to_cpu(data_meta->rx_qid));
 	else
 		bpf_printk("RX queue ID not present\n");
 
-	if (BITFIELD_GET_META(XDP_META_RX_TSTAMP_BIT, data_meta->rx_flags))
-		bpf_printk("RX timestamp: %d\n", __bpf_le32_to_cpu(data_meta->rx_tstamp));
+	if (BITFIELD_GET(XDP_META_RX_TSTAMP_PRESENT, rx_flags))
+		bpf_printk("RX timestamp: %d\n", __bpf_le64_to_cpu(data_meta->rx_tstamp));
 	else
 		bpf_printk("RX timestamp not present\n");
 
-	vlan_type = BITFIELD_GET_META(XDP_META_RX_VLAN_TYPE, data_meta->rx_flags);
+	vlan_type = BITFIELD_GET(XDP_META_RX_VLAN_TYPE, rx_flags);
 	if (vlan_type)
 		bpf_printk("RX VLAN type: %s, VLAN ID: %d",
 			   vlan_type == XDP_META_RX_CVID ? "customer" : "service",
-			   __bpf_le32_to_cpu(data_meta->rx_vid));
+			   __bpf_le16_to_cpu(data_meta->rx_vid));
 	else
 		bpf_printk("No VLAN detected\n");
 
-	hash_type = BITFIELD_GET_META(XDP_META_RX_HASH_TYPE, data_meta->rx_flags);
+	hash_type = BITFIELD_GET(XDP_META_RX_HASH_TYPE, rx_flags);
 	if (hash_type)
 		bpf_printk("RX hash type: L%d, hash value: 0x%x\n",
 			   hash_type + 1, __bpf_le32_to_cpu(data_meta->rx_hash));
 	else
 		bpf_printk("RX hash not present\n");
 
-	csum_level = BITFIELD_GET_META(XDP_META_RX_CSUM_LEVEL, data_meta->rx_flags);
-	csum_status = BITFIELD_GET_META(XDP_META_RX_CSUM_STATUS, data_meta->rx_flags);
+	csum_level = BITFIELD_GET(XDP_META_RX_CSUM_LEVEL, rx_flags);
+	csum_status = BITFIELD_GET(XDP_META_RX_CSUM_STATUS, rx_flags);
 	if (csum_status == XDP_META_RX_CSUM_COMP)
 		bpf_printk("L%d checksum is: 0x%x\n", csum_level,
 			   __bpf_le32_to_cpu(data_meta->rx_csum));

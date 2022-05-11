@@ -260,7 +260,7 @@ enum libbpf_tristate {
 #define bpf_printk(fmt, args...) ___bpf_pick_printk(args)(fmt, ##args)
 
 static __always_inline void *
-get_mem_ptr_with_var_offset(__u32 mem_ptr, __u32 mem_end, __u64 off, const __u64 len)
+bpf_access_mem(__u64 mem, __u64 mem_end, __u64 off, const __u64 len)
 {
 	void *ret;
 
@@ -278,7 +278,7 @@ get_mem_ptr_with_var_offset(__u32 mem_ptr, __u32 mem_end, __u64 off, const __u64
 		     "goto +1\n\t"
 		     "%[ret] = %[null]\n\t"
 		     : [ret]"=r"(ret)
-		     : [start]"r"(mem_ptr), [end]"r"(mem_end), [off]"r"(off), [len]"ri"(len),
+		     : [start]"r"(mem), [end]"r"(mem_end), [off]"r"(off), [len]"ri"(len),
 		       [offmax]"i"(0xff), [null]"i"(NULL)
 		     : "r1", "r2");
 

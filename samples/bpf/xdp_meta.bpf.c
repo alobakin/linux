@@ -51,7 +51,7 @@ int xdp_meta_prog(struct xdp_md *ctx)
 		return XDP_DROP;
 	}
 
-	magic_meta = __bpf_le32_to_cpu(data_meta->magic);
+	magic_meta = __bpf_le16_to_cpu(data_meta->magic);
 	if (magic_meta != XDP_META_GENERIC_MAGIC) {
 		bpf_printk("meta des not contain generic hints, based on received magic: 0x%x\n",
 			   magic_meta);

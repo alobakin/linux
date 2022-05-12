@@ -259,6 +259,8 @@ enum libbpf_tristate {
 /* Helper macro to print out debug messages */
 #define bpf_printk(fmt, args...) ___bpf_pick_printk(args)(fmt, ##args)
 
+#define MAX_PACKET_OFF 0xffff
+
 static __always_inline void *
 bpf_access_mem(__u64 mem, __u64 mem_end, __u64 off, const __u64 len)
 {
@@ -279,7 +281,7 @@ bpf_access_mem(__u64 mem, __u64 mem_end, __u64 off, const __u64 len)
 		     "%[ret] = %[null]\n\t"
 		     : [ret]"=r"(ret)
 		     : [start]"r"(mem), [end]"r"(mem_end), [off]"r"(off), [len]"ri"(len),
-		       [offmax]"i"(0xff), [null]"i"(NULL)
+		       [offmax]"i"(MAX_PACKET_OFF), [null]"i"(NULL)
 		     : "r1", "r2");
 
 	return ret;

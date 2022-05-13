@@ -37,8 +37,8 @@ int xdp_meta_prog(struct xdp_md *ctx)
 {
 	u16 vlan_type, hash_type, csum_level, csum_status;
 	struct xdp_meta_generic *data_meta;
-	u32 magic_meta, offset, rx_flags;
 	u64 btf_id_libbpf, btf_id_hints;
+	u32 offset, rx_flags;
 
 	offset = ctx->data - ctx->data_meta;
 	data_meta = bpf_access_mem(ctx->data_meta, ctx->data,
@@ -51,10 +51,9 @@ int xdp_meta_prog(struct xdp_md *ctx)
 		return XDP_DROP;
 	}
 
-	magic_meta = __bpf_le16_to_cpu(data_meta->magic);
-	if (magic_meta != XDP_META_GENERIC_MAGIC) {
+	if (data_meta->magic !=  __bpf_cpu_to_le16(XDP_META_GENERIC_MAGIC)) {
 		bpf_printk("meta des not contain generic hints, based on received magic: 0x%x\n",
-			   magic_meta);
+			   __bpf_le16_to_cpu(data_meta->magic));
 		return XDP_DROP;
 	}
 

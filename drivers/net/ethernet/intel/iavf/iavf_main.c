@@ -1236,7 +1236,7 @@ static void iavf_configure(struct iavf_adapter *adapter)
 	for (i = 0; i < adapter->num_active_queues; i++) {
 		struct iavf_ring *ring = &adapter->rx_rings[i];
 
-		iavf_alloc_rx_buffers(ring, IAVF_DESC_UNUSED(ring));
+		iavf_alloc_rx_buffers(ring);
 	}
 }
 

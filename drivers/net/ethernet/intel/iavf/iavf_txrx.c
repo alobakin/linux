@@ -302,7 +302,7 @@ static bool iavf_clean_tx_irq(struct iavf_vsi *vsi,
 		    ((j / WB_STRIDE) == 0) && (j > 0) &&
 		    !test_bit(__IAVF_VSI_DOWN, vsi->state) &&
 		    (IAVF_DESC_UNUSED(tx_ring) != tx_ring->count))
-			tx_ring->arm_wb = true;
+			tx_ring->flags |= IAVF_TXRX_FLAGS_ARM_WB;
 	}
 
 	/* notify netdev of completed buffers */
@@ -715,17 +715,16 @@ void iavf_clean_rx_ring(struct iavf_ring *rx_ring)
 		/* Invalidate cache lines that may have been written to by
 		 * device so that we avoid corrupting memory.
 		 */
-		dma_sync_single_range_for_cpu(rx_ring->dev, dma, IAVF_SKB_PAD,
-					      rx_ring->rx_buf_len,
+		dma_sync_single_range_for_cpu(rx_ring->dev, dma,
+					      LIBIE_SKB_HEADROOM,
+					      LIBIE_RX_BUF_LEN,
 					      DMA_FROM_DEVICE);
 
 		/* free resources associated with mapping */
-		dma_unmap_page_attrs(rx_ring->dev, dma,
-				     iavf_rx_pg_size(rx_ring),
-				     DMA_FROM_DEVICE,
-				     IAVF_RX_DMA_ATTR);
+		dma_unmap_page_attrs(rx_ring->dev, dma, LIBIE_RX_TRUESIZE,
+				     DMA_FROM_DEVICE, IAVF_RX_DMA_ATTR);
 
-		__free_pages(page, iavf_rx_pg_order(rx_ring));
+		__free_page(page);
 	}
 
 	rx_ring->next_to_clean = 0;
@@ -814,31 +813,29 @@ static inline void iavf_release_rx_desc(struct iavf_ring *rx_ring, u32 val)
 /**
  * iavf_alloc_mapped_page - allocate and map a new page
  * @dev: device used for DMA mapping
- * @order: page order to allocate
  * @gfp: GFP mask to allocate page
  *
  * Returns a new &page if the it was successfully allocated, %NULL otherwise.
  **/
-static struct page *iavf_alloc_mapped_page(struct device *dev, u32 order,
-					   gfp_t gfp)
+static struct page *iavf_alloc_mapped_page(struct device *dev, gfp_t gfp)
 {
 	struct page *page;
 	dma_addr_t dma;
 
 	/* alloc new page for storage */
-	page = __dev_alloc_pages(gfp, order);
+	page = __dev_alloc_page(gfp);
 	if (unlikely(!page))
 		return NULL;
 
 	/* map page for use */
-	dma = dma_map_page_attrs(dev, page, 0, PAGE_SIZE << order,
-				 DMA_FROM_DEVICE, IAVF_RX_DMA_ATTR);
+	dma = dma_map_page_attrs(dev, page, 0, PAGE_SIZE, DMA_FROM_DEVICE,
+				 IAVF_RX_DMA_ATTR);
 
 	/* if mapping failed free memory back to system since
 	 * there isn't much point in holding memory we can't use
 	 */
 	if (dma_mapping_error(dev, dma)) {
-		__free_pages(page, order);
+		__free_page(page);
 		return NULL;
 	}
 
@@ -880,7 +877,6 @@ static void iavf_receive_skb(struct iavf_ring *rx_ring,
 static u32 __iavf_alloc_rx_pages(struct iavf_ring *rx_ring, u32 to_refill,
 				 gfp_t gfp)
 {
-	u32 order = iavf_rx_pg_order(rx_ring);
 	struct device *dev = rx_ring->dev;
 	u32 ntu = rx_ring->next_to_use;
 	union iavf_rx_desc *rx_desc;
@@ -895,7 +891,7 @@ static u32 __iavf_alloc_rx_pages(struct iavf_ring *rx_ring, u32 to_refill,
 		struct page *page;
 		dma_addr_t dma;
 
-		page = iavf_alloc_mapped_page(dev, order, gfp);
+		page = iavf_alloc_mapped_page(dev, gfp);
 		if (!page) {
 			rx_ring->rx_stats.alloc_page_failed++;
 			break;
@@ -905,14 +901,14 @@ static u32 __iavf_alloc_rx_pages(struct iavf_ring *rx_ring, u32 to_refill,
 		dma = page_pool_get_dma_addr(page);
 
 		/* sync the buffer for use by the device */
-		dma_sync_single_range_for_device(dev, dma, IAVF_SKB_PAD,
-						 rx_ring->rx_buf_len,
+		dma_sync_single_range_for_device(dev, dma, LIBIE_SKB_HEADROOM,
+						 LIBIE_RX_BUF_LEN,
 						 DMA_FROM_DEVICE);
 
 		/* Refresh the desc even if buffer_addrs didn't change
 		 * because each write-back erases this info.
 		 */
-		rx_desc->read.pkt_addr = cpu_to_le64(dma + IAVF_SKB_PAD);
+		rx_desc->read.pkt_addr = cpu_to_le64(dma + LIBIE_SKB_HEADROOM);
 
 		rx_desc++;
 		ntu++;
@@ -1083,24 +1079,16 @@ static bool iavf_cleanup_headers(struct iavf_ring *rx_ring, struct sk_buff *skb)
  * @skb: sk_buff to place the data into
  * @page: page containing data to add
  * @size: packet length from rx_desc
- * @pg_size: Rx buffer page size
  *
  * This function will add the data contained in page to the skb.
  * It will just attach the page as a frag to the skb.
  *
  * The function will then update the page offset.
  **/
-static void iavf_add_rx_frag(struct sk_buff *skb, struct page *page, u32 size,
-			     u32 pg_size)
+static void iavf_add_rx_frag(struct sk_buff *skb, struct page *page, u32 size)
 {
-#if (PAGE_SIZE < 8192)
-	unsigned int truesize = pg_size / 2;
-#else
-	unsigned int truesize = SKB_DATA_ALIGN(size + IAVF_SKB_PAD);
-#endif
-
-	skb_add_rx_frag(skb, skb_shinfo(skb)->nr_frags, page, IAVF_SKB_PAD,
-			size, truesize);
+	skb_add_rx_frag(skb, skb_shinfo(skb)->nr_frags, page,
+			LIBIE_SKB_HEADROOM, size, LIBIE_RX_TRUESIZE);
 }
 
 /**
@@ -1114,40 +1102,34 @@ static void iavf_add_rx_frag(struct sk_buff *skb, struct page *page, u32 size,
 static void iavf_sync_rx_page(struct device *dev, struct page *page, u32 size)
 {
 	dma_sync_single_range_for_cpu(dev, page_pool_get_dma_addr(page),
-				      IAVF_SKB_PAD, size, DMA_FROM_DEVICE);
+				      LIBIE_SKB_HEADROOM, size,
+				      DMA_FROM_DEVICE);
 }
 
 /**
  * iavf_build_skb - Build skb around an existing buffer
  * @page: Rx page to with the data
  * @size: size of the data
- * @pg_size: size of the Rx page
  *
  * This function builds an skb around an existing Rx buffer, taking care
  * to set up the skb correctly and avoid any memcpy overhead.
  */
-static struct sk_buff *iavf_build_skb(struct page *page, u32 size, u32 pg_size)
+static struct sk_buff *iavf_build_skb(struct page *page, u32 size)
 {
-	void *va;
-#if (PAGE_SIZE < 8192)
-	unsigned int truesize = pg_size / 2;
-#else
-	unsigned int truesize = SKB_DATA_ALIGN(sizeof(struct skb_shared_info)) +
-				SKB_DATA_ALIGN(IAVF_SKB_PAD + size);
-#endif
 	struct sk_buff *skb;
+	void *va;
 
 	/* prefetch first cache line of first page */
 	va = page_address(page);
-	net_prefetch(va + IAVF_SKB_PAD);
+	net_prefetch(va + LIBIE_SKB_HEADROOM);
 
 	/* build an skb around the page buffer */
-	skb = napi_build_skb(va, truesize);
+	skb = napi_build_skb(va, LIBIE_RX_TRUESIZE);
 	if (unlikely(!skb))
 		return NULL;
 
 	/* update pointers within the skb to store the data */
-	skb_reserve(skb, IAVF_SKB_PAD);
+	skb_reserve(skb, LIBIE_SKB_HEADROOM);
 	__skb_put(skb, size);
 
 	return skb;
@@ -1157,13 +1139,12 @@ static struct sk_buff *iavf_build_skb(struct page *page, u32 size, u32 pg_size)
  * iavf_unmap_rx_page - Unmap used page
  * @dev: device used for DMA mapping
  * @page: page to release
- * @pg_size: Rx page size
  */
-static void iavf_unmap_rx_page(struct device *dev, struct page *page,
-			       u32 pg_size)
+static void iavf_unmap_rx_page(struct device *dev, struct page *page)
 {
-	dma_unmap_page_attrs(dev, page_pool_get_dma_addr(page), pg_size,
-			     DMA_FROM_DEVICE, IAVF_RX_DMA_ATTR);
+	dma_unmap_page_attrs(dev, page_pool_get_dma_addr(page),
+			     LIBIE_RX_TRUESIZE, DMA_FROM_DEVICE,
+			     IAVF_RX_DMA_ATTR);
 	page_pool_set_dma_addr(page, 0);
 }
 
@@ -1209,7 +1190,6 @@ static int iavf_clean_rx_irq(struct iavf_ring *rx_ring, int budget)
 	unsigned int total_rx_bytes = 0, total_rx_packets = 0;
 	const gfp_t gfp = GFP_ATOMIC | __GFP_NOWARN;
 	u32 to_refill = IAVF_DESC_UNUSED(rx_ring);
-	u32 pg_size = iavf_rx_pg_size(rx_ring);
 	struct sk_buff *skb = rx_ring->skb;
 	struct device *dev = rx_ring->dev;
 	u32 ntc = rx_ring->next_to_clean;
@@ -1260,23 +1240,23 @@ static int iavf_clean_rx_irq(struct iavf_ring *rx_ring, int budget)
 		 * stripped by the HW.
 		 */
 		if (unlikely(!size)) {
-			iavf_unmap_rx_page(dev, page, pg_size);
-			__free_pages(page, get_order(pg_size));
+			iavf_unmap_rx_page(dev, page);
+			__free_page(page);
 			goto skip_data;
 		}
 
 		iavf_sync_rx_page(dev, page, size);
-		iavf_unmap_rx_page(dev, page, pg_size);
+		iavf_unmap_rx_page(dev, page);
 
 		/* retrieve a buffer from the ring */
 		if (skb)
-			iavf_add_rx_frag(skb, page, size, pg_size);
+			iavf_add_rx_frag(skb, page, size);
 		else
-			skb = iavf_build_skb(page, size, pg_size);
+			skb = iavf_build_skb(page, size);
 
 		/* exit if we failed to retrieve a buffer */
 		if (!skb) {
-			__free_pages(page, get_order(pg_size));
+			__free_page(page);
 			rx_ring->rx_stats.alloc_buff_failed++;
 			break;
 		}
@@ -1486,8 +1466,8 @@ int iavf_napi_poll(struct napi_struct *napi, int budget)
 			clean_complete = false;
 			continue;
 		}
-		arm_wb |= ring->arm_wb;
-		ring->arm_wb = false;
+		arm_wb |= !!(ring->flags & IAVF_TXRX_FLAGS_ARM_WB);
+		ring->flags &= ~IAVF_TXRX_FLAGS_ARM_WB;
 	}
 
 	/* Handle case where we are called by netpoll with a budget of 0 */

@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0
 /* Copyright(c) 2013 - 2018 Intel Corporation. */
 
+#include <linux/net/intel/libie/rx.h>
+
 #include "iavf.h"
 #include "iavf_prototype.h"
 #include "iavf_client.h"
@@ -709,32 +711,10 @@ static void iavf_configure_tx(struct iavf_adapter *adapter)
  **/
 static void iavf_configure_rx(struct iavf_adapter *adapter)
 {
-	unsigned int rx_buf_len = IAVF_RXBUFFER_2048;
 	struct iavf_hw *hw = &adapter->hw;
-	int i;
 
-	if (PAGE_SIZE < 8192) {
-		struct net_device *netdev = adapter->netdev;
-
-		/* For jumbo frames on systems with 4K pages we have to use
-		 * an order 1 page, so we might as well increase the size
-		 * of our Rx buffer to make better use of the available space
-		 */
-		rx_buf_len = IAVF_RXBUFFER_3072;
-
-		/* We use a 1536 buffer size for configurations with
-		 * standard Ethernet mtu.  On x86 this gives us enough room
-		 * for shared info and 192 bytes of padding.
-		 */
-		if (!IAVF_2K_TOO_SMALL_WITH_PADDING &&
-		    (netdev->mtu <= ETH_DATA_LEN))
-			rx_buf_len = IAVF_RXBUFFER_1536 - NET_IP_ALIGN;
-	}
-
-	for (i = 0; i < adapter->num_active_queues; i++) {
+	for (u32 i = 0; i < adapter->num_active_queues; i++)
 		adapter->rx_rings[i].tail = hw->hw_addr + IAVF_QRX_TAIL1(i);
-		adapter->rx_rings[i].rx_buf_len = rx_buf_len;
-	}
 }
 
 /**
@@ -2577,11 +2557,7 @@ static void iavf_init_config_adapter(struct iavf_adapter *adapter)
 
 	netdev->netdev_ops = &iavf_netdev_ops;
 	iavf_set_ethtool_ops(netdev);
-	netdev->watchdog_timeo = 5 * HZ;
-
-	/* MTU range: 68 - 9710 */
-	netdev->min_mtu = ETH_MIN_MTU;
-	netdev->max_mtu = IAVF_MAX_RXBUFFER - IAVF_PACKET_HDR_PAD;
+	netdev->max_mtu = LIBIE_MAX_MTU;
 
 	if (!is_valid_ether_addr(adapter->hw.mac.addr)) {
 		dev_info(&pdev->dev, "Invalid MAC address %pM, using random\n",

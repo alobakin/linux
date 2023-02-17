@@ -272,17 +272,6 @@ struct iavf_tx_buffer {
 	u32 tx_flags;
 };
 
-struct iavf_rx_buffer {
-	dma_addr_t dma;
-	struct page *page;
-#if (BITS_PER_LONG > 32) || (PAGE_SIZE >= 65536)
-	__u32 page_offset;
-#else
-	__u16 page_offset;
-#endif
-	__u16 pagecnt_bias;
-};
-
 struct iavf_queue_stats {
 	u64 packets;
 	u64 bytes;
@@ -302,8 +291,6 @@ struct iavf_rx_queue_stats {
 	u64 non_eop_descs;
 	u64 alloc_page_failed;
 	u64 alloc_buff_failed;
-	u64 page_reuse_count;
-	u64 realloc_count;
 };
 
 enum iavf_ring_state_t {
@@ -331,7 +318,7 @@ struct iavf_ring {
 	struct net_device *netdev;	/* netdev ring maps to */
 	union {
 		struct iavf_tx_buffer *tx_bi;
-		struct iavf_rx_buffer *rx_bi;
+		struct page **rx_pages;
 	};
 	DECLARE_BITMAP(state, __IAVF_RING_STATE_NBITS);
 	u16 queue_index;		/* Queue number of ring */
@@ -425,7 +412,7 @@ static inline unsigned int iavf_rx_pg_order(struct iavf_ring *ring)
 
 #define iavf_rx_pg_size(_ring) (PAGE_SIZE << iavf_rx_pg_order(_ring))
 
-void iavf_alloc_rx_buffers(struct iavf_ring *rxr);
+void iavf_alloc_rx_pages(struct iavf_ring *rxr);
 netdev_tx_t iavf_xmit_frame(struct sk_buff *skb, struct net_device *netdev);
 void iavf_clean_tx_ring(struct iavf_ring *tx_ring);
 void iavf_clean_rx_ring(struct iavf_ring *rx_ring);

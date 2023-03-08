@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: GPL-2.0-only
+# Copyright(c) 2023 Intel Corporation.
+
+config LIBIE
+	tristate
+	help
+	  libie (Intel Ethernet library) is a common library containing
+	  routines shared between several Intel Ethernet drivers.

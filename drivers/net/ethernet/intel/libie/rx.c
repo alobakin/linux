@@ -105,6 +105,34 @@ const struct libie_rx_ptype_parsed libie_rx_ptype_lut[LIBIE_RX_PTYPE_NUM] = {
 };
 EXPORT_SYMBOL_NS_GPL(libie_rx_ptype_lut, LIBIE);
 
+/* Page Pool */
+
+/**
+ * libie_rx_page_pool_create - create a PP with the default libie settings
+ * @napi: &napi_struct covering this PP (no usage outside its poll loops)
+ * @size: size of the PP, usually simply Rx queue len
+ *
+ * Returns &page_pool on success, casted -errno on failure.
+ */
+struct page_pool *libie_rx_page_pool_create(struct napi_struct *napi,
+					    u32 size)
+{
+	const struct page_pool_params pp = {
+		.flags		= PP_FLAG_DMA_MAP | PP_FLAG_DMA_SYNC_DEV,
+		.order		= LIBIE_RX_PAGE_ORDER,
+		.pool_size	= size,
+		.nid		= NUMA_NO_NODE,
+		.dev		= napi->dev->dev.parent,
+		.napi		= napi,
+		.dma_dir	= DMA_FROM_DEVICE,
+		.max_len	= LIBIE_RX_BUF_LEN,
+		.offset		= LIBIE_SKB_HEADROOM,
+	};
+
+	return page_pool_create(&pp);
+}
+EXPORT_SYMBOL_NS_GPL(libie_rx_page_pool_create, LIBIE);
+
 MODULE_AUTHOR("Intel Corporation");
 MODULE_DESCRIPTION("Intel(R) Ethernet common library");
 MODULE_LICENSE("GPL");

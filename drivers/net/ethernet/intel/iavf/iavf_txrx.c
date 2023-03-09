@@ -3,7 +3,6 @@
 
 #include <linux/net/intel/libie/rx.h>
 #include <linux/prefetch.h>
-#include <net/page_pool.h>
 
 #include "iavf.h"
 #include "iavf_trace.h"
@@ -691,8 +690,6 @@ err:
  **/
 void iavf_clean_rx_ring(struct iavf_ring *rx_ring)
 {
-	u16 i;
-
 	/* ring already cleared, nothing to do */
 	if (!rx_ring->rx_pages)
 		return;
@@ -703,28 +700,17 @@ void iavf_clean_rx_ring(struct iavf_ring *rx_ring)
 	}
 
 	/* Free all the Rx ring sk_buffs */
-	for (i = 0; i < rx_ring->count; i++) {
+	for (u32 i = 0; i < rx_ring->count; i++) {
 		struct page *page = rx_ring->rx_pages[i];
-		dma_addr_t dma;
 
 		if (!page)
 			continue;
 
-		dma = page_pool_get_dma_addr(page);
-
 		/* Invalidate cache lines that may have been written to by
 		 * device so that we avoid corrupting memory.
 		 */
-		dma_sync_single_range_for_cpu(rx_ring->dev, dma,
-					      LIBIE_SKB_HEADROOM,
-					      LIBIE_RX_BUF_LEN,
-					      DMA_FROM_DEVICE);
-
-		/* free resources associated with mapping */
-		dma_unmap_page_attrs(rx_ring->dev, dma, LIBIE_RX_TRUESIZE,
-				     DMA_FROM_DEVICE, IAVF_RX_DMA_ATTR);
-
-		__free_page(page);
+		page_pool_dma_sync_full_for_cpu(rx_ring->pool, page);
+		page_pool_put_full_page(rx_ring->pool, page, false);
 	}
 
 	rx_ring->next_to_clean = 0;
@@ -739,9 +725,14 @@ void iavf_clean_rx_ring(struct iavf_ring *rx_ring)
  **/
 void iavf_free_rx_resources(struct iavf_ring *rx_ring)
 {
+	struct device *dev = rx_ring->pool->p.dev;
+
 	iavf_clean_rx_ring(rx_ring);
 	kfree(rx_ring->rx_pages);
 	rx_ring->rx_pages = NULL;
+
+	page_pool_destroy(rx_ring->pool);
+	rx_ring->dev = dev;
 
 	if (rx_ring->desc) {
 		dma_free_coherent(rx_ring->dev, rx_ring->size,
@@ -759,13 +750,15 @@ void iavf_free_rx_resources(struct iavf_ring *rx_ring)
 int iavf_setup_rx_descriptors(struct iavf_ring *rx_ring)
 {
 	struct device *dev = rx_ring->dev;
+	struct page_pool *pool;
+	int ret = -ENOMEM;
 
 	/* warn if we are about to overwrite the pointer */
 	WARN_ON(rx_ring->rx_pages);
 	rx_ring->rx_pages = kcalloc(rx_ring->count, sizeof(*rx_ring->rx_pages),
 				    GFP_KERNEL);
 	if (!rx_ring->rx_pages)
-		return -ENOMEM;
+		return ret;
 
 	u64_stats_init(&rx_ring->syncp);
 
@@ -781,15 +774,27 @@ int iavf_setup_rx_descriptors(struct iavf_ring *rx_ring)
 		goto err;
 	}
 
+	pool = libie_rx_page_pool_create(&rx_ring->q_vector->napi,
+					 rx_ring->count);
+	if (IS_ERR(pool)) {
+		ret = PTR_ERR(pool);
+		goto err_free_dma;
+	}
+
+	rx_ring->pool = pool;
+
 	rx_ring->next_to_clean = 0;
 	rx_ring->next_to_use = 0;
 
 	return 0;
+
+err_free_dma:
+	dma_free_coherent(dev, rx_ring->size, rx_ring->desc, rx_ring->dma);
 err:
 	kfree(rx_ring->rx_pages);
 	rx_ring->rx_pages = NULL;
 
-	return -ENOMEM;
+	return ret;
 }
 
 /**
@@ -808,40 +813,6 @@ static inline void iavf_release_rx_desc(struct iavf_ring *rx_ring, u32 val)
 	 */
 	wmb();
 	writel(val, rx_ring->tail);
-}
-
-/**
- * iavf_alloc_mapped_page - allocate and map a new page
- * @dev: device used for DMA mapping
- * @gfp: GFP mask to allocate page
- *
- * Returns a new &page if the it was successfully allocated, %NULL otherwise.
- **/
-static struct page *iavf_alloc_mapped_page(struct device *dev, gfp_t gfp)
-{
-	struct page *page;
-	dma_addr_t dma;
-
-	/* alloc new page for storage */
-	page = __dev_alloc_page(gfp);
-	if (unlikely(!page))
-		return NULL;
-
-	/* map page for use */
-	dma = dma_map_page_attrs(dev, page, 0, PAGE_SIZE, DMA_FROM_DEVICE,
-				 IAVF_RX_DMA_ATTR);
-
-	/* if mapping failed free memory back to system since
-	 * there isn't much point in holding memory we can't use
-	 */
-	if (dma_mapping_error(dev, dma)) {
-		__free_page(page);
-		return NULL;
-	}
-
-	page_pool_set_dma_addr(page, dma);
-
-	return page;
 }
 
 /**
@@ -877,7 +848,7 @@ static void iavf_receive_skb(struct iavf_ring *rx_ring,
 static u32 __iavf_alloc_rx_pages(struct iavf_ring *rx_ring, u32 to_refill,
 				 gfp_t gfp)
 {
-	struct device *dev = rx_ring->dev;
+	struct page_pool *pool = rx_ring->pool;
 	u32 ntu = rx_ring->next_to_use;
 	union iavf_rx_desc *rx_desc;
 
@@ -891,7 +862,7 @@ static u32 __iavf_alloc_rx_pages(struct iavf_ring *rx_ring, u32 to_refill,
 		struct page *page;
 		dma_addr_t dma;
 
-		page = iavf_alloc_mapped_page(dev, gfp);
+		page = page_pool_alloc_pages(pool, gfp);
 		if (!page) {
 			rx_ring->rx_stats.alloc_page_failed++;
 			break;
@@ -899,11 +870,6 @@ static u32 __iavf_alloc_rx_pages(struct iavf_ring *rx_ring, u32 to_refill,
 
 		rx_ring->rx_pages[ntu] = page;
 		dma = page_pool_get_dma_addr(page);
-
-		/* sync the buffer for use by the device */
-		dma_sync_single_range_for_device(dev, dma, LIBIE_SKB_HEADROOM,
-						 LIBIE_RX_BUF_LEN,
-						 DMA_FROM_DEVICE);
 
 		/* Refresh the desc even if buffer_addrs didn't change
 		 * because each write-back erases this info.
@@ -1092,21 +1058,6 @@ static void iavf_add_rx_frag(struct sk_buff *skb, struct page *page, u32 size)
 }
 
 /**
- * iavf_sync_rx_page - Synchronize received data for use
- * @dev: device used for DMA mapping
- * @page: Rx page containing the data
- * @size: size of the received data
- *
- * This function will synchronize the Rx buffer for use by the CPU.
- */
-static void iavf_sync_rx_page(struct device *dev, struct page *page, u32 size)
-{
-	dma_sync_single_range_for_cpu(dev, page_pool_get_dma_addr(page),
-				      LIBIE_SKB_HEADROOM, size,
-				      DMA_FROM_DEVICE);
-}
-
-/**
  * iavf_build_skb - Build skb around an existing buffer
  * @page: Rx page to with the data
  * @size: size of the data
@@ -1128,24 +1079,13 @@ static struct sk_buff *iavf_build_skb(struct page *page, u32 size)
 	if (unlikely(!skb))
 		return NULL;
 
+	skb_mark_for_recycle(skb);
+
 	/* update pointers within the skb to store the data */
 	skb_reserve(skb, LIBIE_SKB_HEADROOM);
 	__skb_put(skb, size);
 
 	return skb;
-}
-
-/**
- * iavf_unmap_rx_page - Unmap used page
- * @dev: device used for DMA mapping
- * @page: page to release
- */
-static void iavf_unmap_rx_page(struct device *dev, struct page *page)
-{
-	dma_unmap_page_attrs(dev, page_pool_get_dma_addr(page),
-			     LIBIE_RX_TRUESIZE, DMA_FROM_DEVICE,
-			     IAVF_RX_DMA_ATTR);
-	page_pool_set_dma_addr(page, 0);
 }
 
 /**
@@ -1190,8 +1130,8 @@ static int iavf_clean_rx_irq(struct iavf_ring *rx_ring, int budget)
 	unsigned int total_rx_bytes = 0, total_rx_packets = 0;
 	const gfp_t gfp = GFP_ATOMIC | __GFP_NOWARN;
 	u32 to_refill = IAVF_DESC_UNUSED(rx_ring);
+	struct page_pool *pool = rx_ring->pool;
 	struct sk_buff *skb = rx_ring->skb;
-	struct device *dev = rx_ring->dev;
 	u32 ntc = rx_ring->next_to_clean;
 	u32 ring_size = rx_ring->count;
 	u32 cleaned_count = 0;
@@ -1240,13 +1180,11 @@ static int iavf_clean_rx_irq(struct iavf_ring *rx_ring, int budget)
 		 * stripped by the HW.
 		 */
 		if (unlikely(!size)) {
-			iavf_unmap_rx_page(dev, page);
-			__free_page(page);
+			page_pool_recycle_direct(pool, page);
 			goto skip_data;
 		}
 
-		iavf_sync_rx_page(dev, page, size);
-		iavf_unmap_rx_page(dev, page);
+		page_pool_dma_sync_for_cpu(pool, page, size);
 
 		/* retrieve a buffer from the ring */
 		if (skb)
@@ -1256,7 +1194,7 @@ static int iavf_clean_rx_irq(struct iavf_ring *rx_ring, int budget)
 
 		/* exit if we failed to retrieve a buffer */
 		if (!skb) {
-			__free_page(page);
+			page_pool_put_page(pool, page, size, true);
 			rx_ring->rx_stats.alloc_buff_failed++;
 			break;
 		}

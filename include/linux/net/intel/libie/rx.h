@@ -5,7 +5,7 @@
 #define __LIBIE_RX_H
 
 #include <linux/if_vlan.h>
-#include <linux/netdevice.h>
+#include <net/page_pool.h>
 
 /* O(1) converting i40e/ice/iavf's 8/10-bit hardware packet type to a parsed
  * bitfield struct.
@@ -159,5 +159,8 @@ static inline void libie_skb_set_hash(struct sk_buff *skb, u32 hash,
 				      LIBIE_RX_BUF_LEN * 5)
 /* Maximum frame size minus LL overhead */
 #define LIBIE_MAX_MTU		(LIBIE_MAX_RX_FRM_LEN - LIBIE_RX_LL_LEN)
+
+struct page_pool *libie_rx_page_pool_create(struct napi_struct *napi,
+					    u32 size);
 
 #endif /* __LIBIE_RX_H */

@@ -86,6 +86,7 @@ config E1000E_HWTS
 
 config LIBIE
 	tristate
+	select PAGE_POOL
 	help
 	  libie (Intel Ethernet library) is a common library containing
 	  routines shared by several Intel Ethernet drivers.

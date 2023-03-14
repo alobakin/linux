@@ -46,6 +46,8 @@
 
 /* Rx buffer management */
 
+struct libie_rq_stats;
+
 /**
  * struct libie_rx_buffer - structure representing an Rx buffer
  * @page: page holding the buffer
@@ -68,6 +70,7 @@ struct libie_rx_buffer {
  * @rx_bi: array of Rx buffers
  * @truesize: size to allocate per buffer, w/overhead
  * @count: number of descriptors/buffers the queue has
+ * @stats: pointer to the software per-queue stats
  * @rx_buf_len: HW-writeable length per each buffer
  */
 struct libie_rx_queue {
@@ -76,6 +79,8 @@ struct libie_rx_queue {
 
 	u32			truesize;
 	u32			count;
+
+	struct libie_rq_stats	*stats;
 
 	/* Cold fields */
 	u32			rx_buf_len;

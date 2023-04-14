@@ -32,12 +32,18 @@
 
 #include <linux/mm.h> /* Needed by ptr_ring */
 #include <linux/ptr_ring.h>
-#include <linux/dma-direction.h>
+#include <linux/dma-mapping.h>
 
-#define PP_FLAG_DMA_MAP		BIT(0) /* Should page_pool do the DMA
+#define PP_FLAG_DMA_MAP		BIT(5) /* Should page_pool do the DMA
 					* map/unmap
 					*/
-#define PP_FLAG_DMA_SYNC_DEV	BIT(1) /* If set all pages that the driver gets
+#define PP_FLAG_DMA_MAP_WEAK	BIT(1) /* Map with %DMA_ATTR_WEAK_ORDERING */
+/* These flags correspond to the DMA map attributes to pass them directly to
+ * dma_map_page_attrs(), see page_pool_dma_map().
+ */
+#define PP_FLAG_DMA_ATTR	(PP_FLAG_DMA_MAP | \
+				 PP_FLAG_DMA_MAP_WEAK)
+#define PP_FLAG_DMA_SYNC_DEV	BIT(0) /* If set all pages that the driver gets
 					* from page_pool will be
 					* DMA-synced-for-device according to
 					* the length provided by the device
@@ -46,7 +52,7 @@
 					* device driver responsibility
 					*/
 #define PP_FLAG_PAGE_FRAG	BIT(2) /* for page frag feature */
-#define PP_FLAG_ALL		(PP_FLAG_DMA_MAP |\
+#define PP_FLAG_ALL		(PP_FLAG_DMA_ATTR |\
 				 PP_FLAG_DMA_SYNC_DEV |\
 				 PP_FLAG_PAGE_FRAG)
 
@@ -233,8 +239,8 @@ static inline struct page *page_pool_dev_alloc_frag(struct page_pool *pool,
 /* get the stored dma direction. A driver might decide to treat this locally and
  * avoid the extra cache line from page_pool to determine the direction
  */
-static
-inline enum dma_data_direction page_pool_get_dma_dir(struct page_pool *pool)
+static inline enum dma_data_direction
+page_pool_get_dma_dir(const struct page_pool *pool)
 {
 	return pool->p.dma_dir;
 }
@@ -354,7 +360,7 @@ static inline void page_pool_recycle_direct(struct page_pool *pool,
 #define PAGE_POOL_DMA_USE_PP_FRAG_COUNT	\
 		(sizeof(dma_addr_t) > sizeof(unsigned long))
 
-static inline dma_addr_t page_pool_get_dma_addr(struct page *page)
+static inline dma_addr_t page_pool_get_dma_addr(const struct page *page)
 {
 	dma_addr_t ret = page->dma_addr;
 
@@ -369,6 +375,37 @@ static inline void page_pool_set_dma_addr(struct page *page, dma_addr_t addr)
 	page->dma_addr = addr;
 	if (PAGE_POOL_DMA_USE_PP_FRAG_COUNT)
 		page->dma_addr_upper = upper_32_bits(addr);
+}
+
+/**
+ * page_pool_dma_sync_for_cpu - sync Rx page for CPU after it's written by HW
+ * @pool: page_pool which this page belongs to
+ * @page: page to sync
+ * @dma_sync_size: size of the data written to the page
+ *
+ * Can be used as a shorthand to sync Rx pages before accessing them in the
+ * driver. The caller must ensure the pool was created with %PP_FLAG_DMA_MAP.
+ */
+static inline void page_pool_dma_sync_for_cpu(const struct page_pool *pool,
+					      const struct page *page,
+					      u32 dma_sync_size)
+{
+	dma_sync_single_range_for_cpu(pool->p.dev,
+				      page_pool_get_dma_addr(page),
+				      pool->p.offset, dma_sync_size,
+				      page_pool_get_dma_dir(pool));
+}
+
+/**
+ * page_pool_dma_sync_for_cpu - sync full Rx page for CPU
+ * @pool: page_pool which this page belongs to
+ * @page: page to sync
+ */
+static inline void
+page_pool_dma_sync_full_for_cpu(const struct page_pool *pool,
+				const struct page *page)
+{
+	page_pool_dma_sync_for_cpu(pool, page, pool->p.max_len);
 }
 
 static inline bool is_page_pool_compiled_in(void)

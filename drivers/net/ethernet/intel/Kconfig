@@ -84,6 +84,12 @@ config E1000E_HWTS
 	 devices. The cross-timestamp is available through the PTP clock
 	 driver precise cross-timestamp ioctl (PTP_SYS_OFFSET_PRECISE).
 
+config LIBIE
+	tristate
+	help
+	  libie (Intel Ethernet library) is a common library containing
+	  routines shared by several Intel Ethernet drivers.
+
 config IGB
 	tristate "Intel(R) 82575/82576 PCI-Express Gigabit Ethernet support"
 	depends on PCI
@@ -225,6 +231,7 @@ config I40E
 	depends on PTP_1588_CLOCK_OPTIONAL
 	depends on PCI
 	select AUXILIARY_BUS
+	select LIBIE
 	help
 	  This driver supports Intel(R) Ethernet Controller XL710 Family of
 	  devices.  For more information on how to identify your adapter, go
@@ -254,8 +261,9 @@ config IAVF
 	tristate
 config I40EVF
 	tristate "Intel(R) Ethernet Adaptive Virtual Function support"
-	select IAVF
 	depends on PCI_MSI
+	select IAVF
+	select LIBIE
 	help
 	  This driver supports virtual functions for Intel XL710,
 	  X710, X722, XXV710, and all devices advertising support for
@@ -282,6 +290,7 @@ config ICE
 	depends on GNSS || GNSS = n
 	select AUXILIARY_BUS
 	select DIMLIB
+	select LIBIE
 	select NET_DEVLINK
 	select PLDMFW
 	help

@@ -161,6 +161,13 @@ static int page_pool_init(struct page_pool *pool,
 			return -EINVAL;
 	}
 
+	/* Passing DMA mapping attributes without asking PP to map pages
+	 * makes no sense.
+	 */
+	if ((pool->p.flags & PP_FLAG_DMA_ATTR) &&
+	    !(pool->p.flags & PP_FLAG_DMA_MAP))
+		return -EINVAL;
+
 	if (pool->p.flags & PP_FLAG_DMA_SYNC_DEV) {
 		/* In order to request DMA-sync-for-device the page
 		 * needs to be mapped
@@ -308,6 +315,14 @@ static bool page_pool_dma_map(struct page_pool *pool, struct page *page)
 {
 	dma_addr_t dma;
 
+	/* Pages are always mapped with %DMA_ATTR_SKIP_CPU_SYNC, so its value
+	 * corresponds to %PP_FLAG_DMA_MAP, which is always set when reaching
+	 * this function.
+	 */
+	static_assert(PP_FLAG_DMA_MAP == DMA_ATTR_SKIP_CPU_SYNC);
+	/* Drivers may set this for PP to map with weak ordering */
+	static_assert(PP_FLAG_DMA_MAP_WEAK == DMA_ATTR_WEAK_ORDERING);
+
 	/* Setup DMA mapping: use 'struct page' area for storing DMA-addr
 	 * since dma_addr_t can be either 32 or 64 bits and does not always fit
 	 * into page private data (i.e 32bit cpu with 64bit DMA caps)
@@ -315,7 +330,8 @@ static bool page_pool_dma_map(struct page_pool *pool, struct page *page)
 	 */
 	dma = dma_map_page_attrs(pool->p.dev, page, 0,
 				 (PAGE_SIZE << pool->p.order),
-				 pool->p.dma_dir, DMA_ATTR_SKIP_CPU_SYNC);
+				 pool->p.dma_dir,
+				 pool->p.flags & PP_FLAG_DMA_ATTR);
 	if (dma_mapping_error(pool->p.dev, dma))
 		return false;
 
@@ -483,7 +499,7 @@ void page_pool_release_page(struct page_pool *pool, struct page *page)
 	/* When page is unmapped, it cannot be returned to our pool */
 	dma_unmap_page_attrs(pool->p.dev, dma,
 			     PAGE_SIZE << pool->p.order, pool->p.dma_dir,
-			     DMA_ATTR_SKIP_CPU_SYNC);
+			     pool->p.flags & PP_FLAG_DMA_ATTR);
 	page_pool_set_dma_addr(page, 0);
 skip_dma_unmap:
 	page_pool_clear_pp_info(page);

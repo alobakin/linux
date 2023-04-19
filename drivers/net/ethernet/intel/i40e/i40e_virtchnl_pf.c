@@ -612,6 +612,9 @@ static int i40e_config_vsi_tx_queue(struct i40e_vf *vf, u16 vsi_id,
 	u32 qtx_ctl;
 	int ret = 0;
 
+	if (info->ring_len == 0)
+		return 0;
+
 	if (!i40e_vc_isvalid_vsi_id(vf, info->vsi_id)) {
 		ret = -ENOENT;
 		goto error_context;
@@ -687,6 +690,9 @@ static int i40e_config_vsi_rx_queue(struct i40e_vf *vf, u16 vsi_id,
 	struct i40e_hw *hw = &pf->hw;
 	struct i40e_hmc_obj_rxq rx_ctx;
 	int ret = 0;
+
+	if (info->ring_len == 0)
+		return 0;
 
 	/* clear the context structure first */
 	memset(&rx_ctx, 0, sizeof(struct i40e_hmc_obj_rxq));

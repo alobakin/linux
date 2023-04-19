@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0
 /* Copyright(c) 2013 - 2018 Intel Corporation. */
 
+#include <linux/net/intel/libie/rx.h>
+
 #include "iavf.h"
 #include "iavf_prototype.h"
 #include "iavf_client.h"
@@ -51,6 +53,59 @@ int iavf_send_api_ver(struct iavf_adapter *adapter)
 }
 
 /**
+ * iavf_poll_virtchnl_msg_timeout
+ * @hw: HW configuration structure
+ * @event: event to populate on success
+ * @op_to_poll: requested virtchnl op to poll for
+ * @msecs: timeout in milliseconds
+ *
+ * Initialize poll for virtchnl msg matching the requested_op. Returns 0
+ * if a message of the correct opcode is in the queue or an error code
+ * if no message matching the op code is waiting and other failures
+ * (including timeout). In case of timeout -EBUSY error is returned.
+ */
+static int
+iavf_poll_virtchnl_msg_timeout(struct iavf_hw *hw,
+			       struct iavf_arq_event_info *event,
+			       enum virtchnl_ops op_to_poll,
+			       unsigned int msecs)
+{
+	unsigned int wait, delay = 10;
+	enum virtchnl_ops received_op;
+	enum iavf_status status;
+	u32 v_retval;
+
+	for (wait = 0; wait < msecs; wait += delay) {
+		/* When the AQ is empty, iavf_clean_arq_element will be
+		 * nonzero and after some delay this loop will check again
+		 * if any message is added to the AQ.
+		 */
+		status = iavf_clean_arq_element(hw, event, NULL);
+		if (status == IAVF_ERR_ADMIN_QUEUE_NO_WORK)
+			goto wait_for_msg;
+		else if (status != IAVF_SUCCESS)
+			break;
+		received_op =
+		    (enum virtchnl_ops)le32_to_cpu(event->desc.cookie_high);
+		if (op_to_poll == received_op)
+			break;
+wait_for_msg:
+		msleep(delay);
+		status = IAVF_ERR_NOT_READY;
+	}
+
+	if (status == IAVF_SUCCESS) {
+		v_retval = le32_to_cpu(event->desc.cookie_low);
+		v_retval = virtchnl_status_to_errno((enum virtchnl_status_code)
+						    v_retval);
+	} else {
+		v_retval = iavf_status_to_errno(status);
+	}
+
+	return v_retval;
+}
+
+/**
  * iavf_poll_virtchnl_msg
  * @hw: HW configuration structure
  * @event: event to populate on success
@@ -83,6 +138,83 @@ iavf_poll_virtchnl_msg(struct iavf_hw *hw, struct iavf_arq_event_info *event,
 
 	v_retval = le32_to_cpu(event->desc.cookie_low);
 	return virtchnl_status_to_errno((enum virtchnl_status_code)v_retval);
+}
+
+/**
+ * iavf_process_pending_pf_msg
+ * @adapter: adapter structure
+ * @timeout_msec: timeout in milliseconds
+ *
+ * Check if any VIRTCHNL message is currently pending and process it
+ * if needed.
+ * Poll the admin queue for the PF response and process it using
+ * a standard handler.
+ * If no PF response has been received within a given timeout, exit
+ * with an error.
+ */
+int
+iavf_process_pending_pf_msg(struct iavf_adapter *adapter,
+			    unsigned int timeout_msecs)
+{
+	enum virtchnl_ops current_op = adapter->current_op;
+	struct iavf_hw *hw = &adapter->hw;
+	struct iavf_arq_event_info event;
+	enum virtchnl_ops v_op;
+	enum iavf_status v_ret;
+	int err;
+
+	if (current_op == VIRTCHNL_OP_UNKNOWN)
+		return 0;
+
+	event.buf_len = IAVF_MAX_AQ_BUF_SIZE;
+	event.msg_buf = kzalloc(IAVF_MAX_AQ_BUF_SIZE, GFP_KERNEL);
+	if (!event.msg_buf)
+		return -ENOMEM;
+
+	err = iavf_poll_virtchnl_msg_timeout(hw, &event, current_op,
+					     timeout_msecs);
+	if (err)
+		goto free_exit;
+
+	v_op = (enum virtchnl_ops)le32_to_cpu(event.desc.cookie_high);
+	v_ret = (enum iavf_status)le32_to_cpu(event.desc.cookie_low);
+
+	iavf_virtchnl_completion(adapter, v_op, v_ret, event.msg_buf,
+				 event.msg_len);
+
+free_exit:
+	kfree(event.msg_buf);
+
+	return err;
+}
+
+/**
+ * iavf_get_vf_op_result
+ * @adapter: adapter structure
+ * @op: virtchnl operation
+ * @msecs: timeout in milliseconds
+ *
+ * Return a result of a given operation returned by PF
+ * or exit with timeout.
+ **/
+static int iavf_get_vf_op_result(struct iavf_adapter *adapter,
+				 enum virtchnl_ops op,
+				 unsigned int msecs)
+{
+	struct iavf_hw *hw = &adapter->hw;
+	struct iavf_arq_event_info event;
+	int err;
+
+	event.buf_len = IAVF_MAX_AQ_BUF_SIZE;
+	event.msg_buf = kzalloc(IAVF_MAX_AQ_BUF_SIZE, GFP_KERNEL);
+	if (!event.msg_buf)
+		return -ENOMEM;
+
+	err = iavf_poll_virtchnl_msg_timeout(hw, &event, op, msecs);
+	kfree(event.msg_buf);
+	adapter->current_op = VIRTCHNL_OP_UNKNOWN;
+
+	return err;
 }
 
 /**
@@ -261,21 +393,94 @@ int iavf_get_vf_vlan_v2_caps(struct iavf_adapter *adapter)
 }
 
 /**
- * iavf_configure_queues
+ * iavf_set_qp_config_info
+ * @vqpi: virtchannel structure for queue pair configuration
  * @adapter: adapter structure
+ * @queue_index: index of queue pair in the adapter structure
+ * @max_frame: maximal frame size supported by the adapter
+ * @xdp_pair: true if the queue pair is assigned to XDP queues
  *
- * Request that the PF set up our (previously allocated) queues.
+ * Fill virtchannel queue pair configuration structure
+ * with data for the Rx and Tx queues of a given index.
+ * To handle XDP queues, only Tx part of vqpi structure is filled
+ * with data. Because of virtchnl protocol can operate on queue pairs only,
+ * associate each extra Tx queue with an empty Rx queue
+ * (with zero length).
  **/
-void iavf_configure_queues(struct iavf_adapter *adapter)
+static void iavf_set_qp_config_info(struct virtchnl_queue_pair_info *vqpi,
+				    struct iavf_adapter *adapter,
+				    int queue_index, u32 max_frame,
+				    bool xdp_pair)
 {
+	struct iavf_ring *rxq = &adapter->rx_rings[queue_index];
+	struct iavf_ring *txq;
+	u32 hr, max_len;
+	int xdpq_idx;
+
+	if (xdp_pair) {
+		xdpq_idx = queue_index - adapter->num_xdp_tx_queues;
+		txq = &adapter->xdp_rings[xdpq_idx];
+	} else {
+		txq = &adapter->tx_rings[queue_index];
+	}
+	vqpi->txq.vsi_id = adapter->vsi_res->vsi_id;
+	vqpi->txq.queue_id = queue_index;
+	vqpi->txq.ring_len = txq->count;
+	vqpi->txq.dma_ring_addr = txq->dma;
+
+	vqpi->rxq.vsi_id = adapter->vsi_res->vsi_id;
+	vqpi->rxq.queue_id = queue_index;
+	if (xdp_pair) {
+		vqpi->rxq.ring_len = 0;
+		return;
+	}
+
+	if (rxq->flags & IAVF_TXRX_FLAGS_XSK) {
+		hr = xsk_pool_get_headroom(rxq->xsk_pool);
+		max_len = xsk_pool_get_rx_frame_size(rxq->xsk_pool);
+	} else {
+		hr = rxq->pool->p.offset;
+		max_len = rxq->pool->p.max_len;
+	}
+
+	max_frame = min_not_zero(max_frame, LIBIE_MAX_RX_FRM_LEN(hr));
+
+	vqpi->rxq.ring_len = rxq->count;
+	vqpi->rxq.dma_ring_addr = rxq->dma;
+	vqpi->rxq.max_pkt_size = max_frame;
+	vqpi->rxq.databuffer_size = max_len;
+}
+
+/**
+ * iavf_get_configure_queues_result
+ * @adapter: adapter structure
+ * @msecs: timeout in milliseconds
+ *
+ * Return a result of CONFIG_VSI_QUEUES command returned by PF
+ * or exit with timeout.
+ **/
+int iavf_get_configure_queues_result(struct iavf_adapter *adapter,
+				    unsigned int msecs)
+{
+	return iavf_get_vf_op_result(adapter, VIRTCHNL_OP_CONFIG_VSI_QUEUES,
+				     msecs);
+}
+
+/**
+ * iavf_configure_selected_queues
+ * @adapter: adapter structure
+ * @qp_mask: mask of queue pairs to configure
+ *
+ * Request that the PF set up our selected (previously allocated) queues.
+ **/
+void iavf_configure_selected_queues(struct iavf_adapter *adapter, u32 qp_mask)
+{
+	int pairs = adapter->num_active_queues + adapter->num_xdp_tx_queues;
+	unsigned long num_qps_to_config, mask = qp_mask;
+	u32 idx, max_frame = adapter->vf_res->max_mtu;
 	struct virtchnl_vsi_queue_config_info *vqci;
-	int i, max_frame = adapter->vf_res->max_mtu;
-	int pairs = adapter->num_active_queues;
 	struct virtchnl_queue_pair_info *vqpi;
 	size_t len;
-
-	if (max_frame > IAVF_MAX_RXBUFFER || !max_frame)
-		max_frame = IAVF_MAX_RXBUFFER;
 
 	if (adapter->current_op != VIRTCHNL_OP_UNKNOWN) {
 		/* bail because we already have a command pending */
@@ -283,36 +488,27 @@ void iavf_configure_queues(struct iavf_adapter *adapter)
 			adapter->current_op);
 		return;
 	}
+	num_qps_to_config = hweight_long(mask);
 	adapter->current_op = VIRTCHNL_OP_CONFIG_VSI_QUEUES;
-	len = struct_size(vqci, qpair, pairs);
+	len = struct_size(vqci, qpair, num_qps_to_config);
 	vqci = kzalloc(len, GFP_KERNEL);
 	if (!vqci)
 		return;
 
-	/* Limit maximum frame size when jumbo frames is not enabled */
-	if (!(adapter->flags & IAVF_FLAG_LEGACY_RX) &&
-	    (adapter->netdev->mtu <= ETH_DATA_LEN))
-		max_frame = IAVF_RXBUFFER_1536 - NET_IP_ALIGN;
-
 	vqci->vsi_id = adapter->vsi_res->vsi_id;
-	vqci->num_queue_pairs = pairs;
+	vqci->num_queue_pairs = num_qps_to_config;
 	vqpi = vqci->qpair;
 	/* Size check is not needed here - HW max is 16 queue pairs, and we
 	 * can fit info for 31 of them into the AQ buffer before it overflows.
 	 */
-	for (i = 0; i < pairs; i++) {
-		vqpi->txq.vsi_id = vqci->vsi_id;
-		vqpi->txq.queue_id = i;
-		vqpi->txq.ring_len = adapter->tx_rings[i].count;
-		vqpi->txq.dma_ring_addr = adapter->tx_rings[i].dma;
-		vqpi->rxq.vsi_id = vqci->vsi_id;
-		vqpi->rxq.queue_id = i;
-		vqpi->rxq.ring_len = adapter->rx_rings[i].count;
-		vqpi->rxq.dma_ring_addr = adapter->rx_rings[i].dma;
-		vqpi->rxq.max_pkt_size = max_frame;
-		vqpi->rxq.databuffer_size =
-			ALIGN(adapter->rx_rings[i].rx_buf_len,
-			      BIT_ULL(IAVF_RXQ_CTX_DBUFF_SHIFT));
+	for_each_set_bit(idx, &mask, adapter->num_active_queues) {
+		iavf_set_qp_config_info(vqpi, adapter, idx, max_frame, false);
+		vqpi++;
+	}
+
+	/* Set configuration info for XDP Tx queues. */
+	for_each_set_bit_from(idx, &mask, pairs) {
+		iavf_set_qp_config_info(vqpi, adapter, idx, max_frame, true);
 		vqpi++;
 	}
 
@@ -323,12 +519,59 @@ void iavf_configure_queues(struct iavf_adapter *adapter)
 }
 
 /**
- * iavf_enable_queues
+ * iavf_configure_queues
  * @adapter: adapter structure
  *
- * Request that the PF enable all of our queues.
+ * Send a request to PF to set up all allocated queues.
  **/
-void iavf_enable_queues(struct iavf_adapter *adapter)
+void iavf_configure_queues(struct iavf_adapter *adapter)
+{
+	int pairs = adapter->num_active_queues + adapter->num_xdp_tx_queues;
+	u32 qpair_mask = BIT(pairs) - 1;
+
+	iavf_configure_selected_queues(adapter, qpair_mask);
+}
+
+/**
+ * iavf_get_queue_disable_result
+ * @adapter: adapter structure
+ * @msecs: timeout in milliseconds
+ *
+ * Return a result DISABLE_QUEUES command result returned by PF or exit
+ * with timeout.
+ **/
+int iavf_get_queue_disable_result(struct iavf_adapter *adapter,
+				  unsigned int msecs)
+{
+	return iavf_get_vf_op_result(adapter, VIRTCHNL_OP_DISABLE_QUEUES,
+				     msecs);
+}
+
+/**
+ * iavf_get_queue_enable_result
+ * @adapter: adapter structure
+ * @msecs: timeout in milliseconds
+ *
+ * Return a result ENABLE_QUEUES command result returned by PF or exit
+ * with timeout.
+ **/
+int iavf_get_queue_enable_result(struct iavf_adapter *adapter,
+				 unsigned int msecs)
+{
+	return iavf_get_vf_op_result(adapter, VIRTCHNL_OP_ENABLE_QUEUES,
+				     msecs);
+}
+
+/**
+ * iavf_enable_selected_queues
+ * @adapter: adapter structure
+ * @rx_queues: mask of Rx queues
+ * @tx_queues: mask of Tx queues
+ *
+ * Send a request to PF to enable selected queues.
+ **/
+void iavf_enable_selected_queues(struct iavf_adapter *adapter, u32 rx_queues,
+				 u32 tx_queues)
 {
 	struct virtchnl_queue_select vqs;
 
@@ -340,20 +583,23 @@ void iavf_enable_queues(struct iavf_adapter *adapter)
 	}
 	adapter->current_op = VIRTCHNL_OP_ENABLE_QUEUES;
 	vqs.vsi_id = adapter->vsi_res->vsi_id;
-	vqs.tx_queues = BIT(adapter->num_active_queues) - 1;
-	vqs.rx_queues = vqs.tx_queues;
+	vqs.tx_queues = tx_queues;
+	vqs.rx_queues = rx_queues;
 	adapter->aq_required &= ~IAVF_FLAG_AQ_ENABLE_QUEUES;
 	iavf_send_pf_msg(adapter, VIRTCHNL_OP_ENABLE_QUEUES,
 			 (u8 *)&vqs, sizeof(vqs));
 }
 
 /**
- * iavf_disable_queues
+ * iavf_disable_selected_queues
  * @adapter: adapter structure
+ * @rx_queues: mask of Rx queues
+ * @tx_queues: mask of Tx queues
  *
- * Request that the PF disable all of our queues.
+ * Send a request to PF to disable selected queues.
  **/
-void iavf_disable_queues(struct iavf_adapter *adapter)
+void iavf_disable_selected_queues(struct iavf_adapter *adapter, u32 rx_queues,
+				  u32 tx_queues)
 {
 	struct virtchnl_queue_select vqs;
 
@@ -365,11 +611,60 @@ void iavf_disable_queues(struct iavf_adapter *adapter)
 	}
 	adapter->current_op = VIRTCHNL_OP_DISABLE_QUEUES;
 	vqs.vsi_id = adapter->vsi_res->vsi_id;
-	vqs.tx_queues = BIT(adapter->num_active_queues) - 1;
-	vqs.rx_queues = vqs.tx_queues;
+	vqs.tx_queues = tx_queues;
+	vqs.rx_queues = rx_queues;
 	adapter->aq_required &= ~IAVF_FLAG_AQ_DISABLE_QUEUES;
 	iavf_send_pf_msg(adapter, VIRTCHNL_OP_DISABLE_QUEUES,
 			 (u8 *)&vqs, sizeof(vqs));
+}
+
+/**
+ * iavf_enable_queues
+ * @adapter: adapter structure
+ *
+ * Send a request to PF to enable all allocated queues.
+ **/
+void iavf_enable_queues(struct iavf_adapter *adapter)
+{
+	u32 num_tx_queues = adapter->num_active_queues +
+			    adapter->num_xdp_tx_queues;
+
+	u32 rx_queues = BIT(adapter->num_active_queues) - 1;
+	u32 tx_queues = BIT(num_tx_queues) - 1;
+
+	iavf_enable_selected_queues(adapter, rx_queues, tx_queues);
+}
+
+/**
+ * iavf_disable_queues
+ * @adapter: adapter structure
+ *
+ * Send a request to PF to disable all allocated queues.
+ **/
+void iavf_disable_queues(struct iavf_adapter *adapter)
+{
+	u32 num_tx_queues = adapter->num_active_queues +
+			    adapter->num_xdp_tx_queues;
+
+	u32 rx_queues = BIT(adapter->num_active_queues) - 1;
+	u32 tx_queues = BIT(num_tx_queues) - 1;
+
+	iavf_disable_selected_queues(adapter, rx_queues, tx_queues);
+}
+
+/**
+ * iavf_get_map_queues_result
+ * @adapter: adapter structure
+ * @msecs: timeout in milliseconds
+ *
+ * Return a result CONFIG_VSI_QUEUES command result returned by PF
+ * or exit with timeout.
+ **/
+int iavf_get_map_queues_result(struct iavf_adapter *adapter,
+			       unsigned int msecs)
+{
+	return iavf_get_vf_op_result(adapter, VIRTCHNL_OP_CONFIG_IRQ_MAP,
+				     msecs);
 }
 
 /**
@@ -1087,6 +1382,21 @@ void iavf_set_rss_key(struct iavf_adapter *adapter)
 	adapter->aq_required &= ~IAVF_FLAG_AQ_SET_RSS_KEY;
 	iavf_send_pf_msg(adapter, VIRTCHNL_OP_CONFIG_RSS_KEY, (u8 *)vrk, len);
 	kfree(vrk);
+}
+
+/**
+ * iavf_get_setting_rss_lut_result
+ * @adapter: adapter structure
+ * @msecs: timeout in milliseconds
+ *
+ * Return a result of CONFIG_VSI_QUEUES command returned by PF
+ * or exit with timeout.
+ **/
+int iavf_get_setting_rss_lut_result(struct iavf_adapter *adapter,
+				    unsigned int msecs)
+{
+	return iavf_get_vf_op_result(adapter, VIRTCHNL_OP_CONFIG_RSS_LUT,
+				     msecs);
 }
 
 /**

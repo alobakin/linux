@@ -4,6 +4,7 @@
 #ifndef _IAVF_H_
 #define _IAVF_H_
 
+#include <linux/bpf.h>
 #include <linux/module.h>
 #include <linux/pci.h>
 #include <linux/netdevice.h>
@@ -27,13 +28,17 @@
 #include <linux/etherdevice.h>
 #include <linux/socket.h>
 #include <linux/jiffies.h>
+#include <linux/filter.h>
 #include <net/ip6_checksum.h>
 #include <net/pkt_cls.h>
 #include <net/pkt_sched.h>
 #include <net/udp.h>
 #include <net/tc_act/tc_gact.h>
 #include <net/tc_act/tc_mirred.h>
+#include <net/xdp.h>
+#include <net/xdp_sock_drv.h>
 
+#include "iavf_xsk.h"
 #include "iavf_type.h"
 #include <linux/avf/virtchnl.h>
 #include "iavf_txrx.h"
@@ -263,11 +268,15 @@ struct iavf_adapter {
 	/* Lock to protect accesses to MAC and VLAN lists */
 	spinlock_t mac_vlan_list_lock;
 	char misc_vector_name[IFNAMSIZ + 9];
-	int num_active_queues;
-	int num_req_queues;
+	u32 num_active_queues;
+	u32 num_xdp_tx_queues;
+	u32 num_req_queues;
+	struct bpf_prog *xdp_prog;
+	unsigned long *af_xdp_zc_qps;
 
 	/* TX */
 	struct iavf_ring *tx_rings;
+	struct iavf_ring *xdp_rings;
 	u32 tx_timeout_count;
 	u32 tx_desc_count;
 
@@ -294,7 +303,7 @@ struct iavf_adapter {
 #define IAVF_FLAG_CLIENT_NEEDS_L2_PARAMS	BIT(12)
 #define IAVF_FLAG_PROMISC_ON			BIT(13)
 #define IAVF_FLAG_ALLMULTI_ON			BIT(14)
-#define IAVF_FLAG_LEGACY_RX			BIT(15)
+/* BIT(15) is free, was IAVF_FLAG_LEGACY_RX */
 #define IAVF_FLAG_REINIT_ITR_NEEDED		BIT(16)
 #define IAVF_FLAG_QUEUES_DISABLED		BIT(17)
 #define IAVF_FLAG_SETUP_NETDEV_FEATURES		BIT(18)
@@ -510,6 +519,17 @@ static inline void iavf_change_state(struct iavf_adapter *adapter,
 		iavf_state_str(adapter->state));
 }
 
+/**
+ * iavf_adapter_xdp_active - Determine if XDP program is loaded
+ * @adapter: board private structure
+ *
+ * Returns true if XDP program is loaded on a given adapter.
+ **/
+static inline bool iavf_adapter_xdp_active(struct iavf_adapter *adapter)
+{
+	return !!READ_ONCE(adapter->xdp_prog);
+}
+
 int iavf_up(struct iavf_adapter *adapter);
 void iavf_down(struct iavf_adapter *adapter);
 int iavf_process_config(struct iavf_adapter *adapter);
@@ -537,11 +557,22 @@ int iavf_send_vf_offload_vlan_v2_msg(struct iavf_adapter *adapter);
 void iavf_set_queue_vlan_tag_loc(struct iavf_adapter *adapter);
 u16 iavf_get_num_vlans_added(struct iavf_adapter *adapter);
 void iavf_irq_enable(struct iavf_adapter *adapter, bool flush);
+void iavf_configure_selected_queues(struct iavf_adapter *adapter, u32 qp_mask);
 void iavf_configure_queues(struct iavf_adapter *adapter);
+int iavf_get_configure_queues_result(struct iavf_adapter *adapter,
+				    unsigned int msecs);
 void iavf_deconfigure_queues(struct iavf_adapter *adapter);
 void iavf_enable_queues(struct iavf_adapter *adapter);
 void iavf_disable_queues(struct iavf_adapter *adapter);
+void iavf_enable_selected_queues(struct iavf_adapter *adapter, u32 rx_queues,
+				 u32 tx_queues);
+void iavf_disable_selected_queues(struct iavf_adapter *adapter, u32 rx_queues,
+				  u32 tx_queues);
+int iavf_get_queue_enable_result(struct iavf_adapter *adapter, unsigned int msecs);
+int iavf_get_queue_disable_result(struct iavf_adapter *adapter, unsigned int msecs);
 void iavf_map_queues(struct iavf_adapter *adapter);
+int iavf_get_map_queues_result(struct iavf_adapter *adapter,
+			       unsigned int msecs);
 int iavf_request_queues(struct iavf_adapter *adapter, int num);
 void iavf_add_ether_addrs(struct iavf_adapter *adapter);
 void iavf_del_ether_addrs(struct iavf_adapter *adapter);
@@ -554,11 +585,17 @@ void iavf_get_hena(struct iavf_adapter *adapter);
 void iavf_set_hena(struct iavf_adapter *adapter);
 void iavf_set_rss_key(struct iavf_adapter *adapter);
 void iavf_set_rss_lut(struct iavf_adapter *adapter);
+int iavf_get_setting_rss_lut_result(struct iavf_adapter *adapter,
+				    unsigned int msecs);
 void iavf_enable_vlan_stripping(struct iavf_adapter *adapter);
 void iavf_disable_vlan_stripping(struct iavf_adapter *adapter);
 void iavf_virtchnl_completion(struct iavf_adapter *adapter,
 			      enum virtchnl_ops v_opcode,
 			      enum iavf_status v_retval, u8 *msg, u16 msglen);
+int iavf_process_pending_pf_msg(struct iavf_adapter *adapter,
+				unsigned int timeout_msecs);
+void iavf_configure_rx_ring(struct iavf_adapter *adapter,
+			    struct iavf_ring *rx_ring);
 int iavf_config_rss(struct iavf_adapter *adapter);
 int iavf_lan_add_device(struct iavf_adapter *adapter);
 int iavf_lan_del_device(struct iavf_adapter *adapter);

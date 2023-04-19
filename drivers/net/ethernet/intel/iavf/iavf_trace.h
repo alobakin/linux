@@ -146,7 +146,23 @@ DEFINE_EVENT(
 	TP_ARGS(ring, desc, skb));
 
 DEFINE_EVENT(
+	iavf_rx_template, iavf_clean_rx_irq_zc,
+	TP_PROTO(struct iavf_ring *ring,
+		 union iavf_32byte_rx_desc *desc,
+		 struct sk_buff *skb),
+
+	TP_ARGS(ring, desc, skb));
+
+DEFINE_EVENT(
 	iavf_rx_template, iavf_clean_rx_irq_rx,
+	TP_PROTO(struct iavf_ring *ring,
+		 union iavf_32byte_rx_desc *desc,
+		 struct sk_buff *skb),
+
+	TP_ARGS(ring, desc, skb));
+
+DEFINE_EVENT(
+	iavf_rx_template, iavf_clean_rx_irq_zc_rx,
 	TP_PROTO(struct iavf_ring *ring,
 		 union iavf_32byte_rx_desc *desc,
 		 struct sk_buff *skb),

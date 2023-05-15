@@ -24,6 +24,9 @@
 					* Please note DMA-sync-for-CPU is still
 					* device driver responsibility
 					*/
+#define PP_FLAG_DMA_MAYBE_SYNC	BIT(2) /* Internal, should not be used in
+					* drivers
+					*/
 #define PP_FLAG_ALL		(PP_FLAG_DMA_MAP |\
 				 PP_FLAG_DMA_SYNC_DEV)
 

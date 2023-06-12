@@ -324,7 +324,8 @@ void page_pool_put_defragged_page(struct page_pool *pool, struct page *page,
  */
 static inline void page_pool_fragment_page(struct page *page, long nr)
 {
-	atomic_long_set(&page->pp_frag_count, nr);
+	if (!PAGE_POOL_DMA_USE_PP_FRAG_COUNT)
+		atomic_long_set(&page->pp_frag_count, nr);
 }
 
 static inline long page_pool_defrag_page(struct page *page, long nr)
@@ -332,19 +333,43 @@ static inline long page_pool_defrag_page(struct page *page, long nr)
 	long ret;
 
 	/* If nr == pp_frag_count then we have cleared all remaining
-	 * references to the page. No need to actually overwrite it, instead
-	 * we can leave this to be overwritten by the calling function.
+	 * references to the page:
+	 * 1. 'n == 1': no need to actually overwrite it.
+	 * 2. 'n != 1': overwrite it with one, which is the rare case
+	 *              for frag draining.
 	 *
-	 * The main advantage to doing this is that an atomic_read is
-	 * generally a much cheaper operation than an atomic update,
-	 * especially when dealing with a page that may be partitioned
-	 * into only 2 or 3 pieces.
+	 * The main advantage to doing this is that not only we avoid a
+	 * atomic update, as an atomic_read is generally a much cheaper
+	 * operation than an atomic update, especially when dealing with
+	 * a page that may be partitioned into only 2 or 3 pieces; but
+	 * also unify the frag and non-frag handling by ensuring all
+	 * pages have been split into one big frag initially, and only
+	 * overwrite it when the page is split into more than one frag.
 	 */
-	if (atomic_long_read(&page->pp_frag_count) == nr)
+	if (atomic_long_read(&page->pp_frag_count) == nr) {
+		/* As we have ensured nr is always one for constant case
+		 * using the BUILD_BUG_ON(), only need to handle the
+		 * non-constant case here for frag count draining, which
+		 * is a rare case.
+		 */
+		BUILD_BUG_ON(__builtin_constant_p(nr) && nr != 1);
+		if (!__builtin_constant_p(nr))
+			atomic_long_set(&page->pp_frag_count, 1);
+
 		return 0;
+	}
 
 	ret = atomic_long_sub_return(nr, &page->pp_frag_count);
 	WARN_ON(ret < 0);
+
+	/* We are the last user here too, reset frag count back to 1 to
+	 * ensure all pages have been split into one big frag initially,
+	 * this should be the rare case when the last two frag users call
+	 * page_pool_defrag_page() currently.
+	 */
+	if (unlikely(!ret))
+		atomic_long_set(&page->pp_frag_count, 1);
+
 	return ret;
 }
 
@@ -353,12 +378,10 @@ static inline bool page_pool_is_last_frag(struct page_pool *pool,
 {
 	/* We assume we are the last frag user that is still holding
 	 * on to the page if:
-	 * 1. Fragments aren't enabled.
-	 * 2. We are running in 32-bit arch with 64-bit DMA.
-	 * 3. page_pool_defrag_page() indicate we are the last user.
+	 * 1. We are running in 32-bit arch with 64-bit DMA.
+	 * 2. page_pool_defrag_page() indicate we are the last user.
 	 */
-	return !(pool->p.flags & PP_FLAG_PAGE_FRAG) ||
-	       PAGE_POOL_DMA_USE_PP_FRAG_COUNT ||
+	return PAGE_POOL_DMA_USE_PP_FRAG_COUNT ||
 	       (page_pool_defrag_page(page, 1) == 0);
 }
 

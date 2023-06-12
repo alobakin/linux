@@ -4,12 +4,28 @@
 Page Pool API
 =============
 
-The page_pool allocator is optimized for the XDP mode that uses one frame
-per-page, but it can fallback on the regular page allocator APIs.
+The page_pool allocator is optimized for recycling page or page frag used by skb
+packet and xdp frame.
 
-Basic use involves replacing alloc_pages() calls with the
-page_pool_alloc_pages() call.  Drivers should use page_pool_dev_alloc_pages()
-replacing dev_alloc_pages().
+Basic use involves replacing alloc_pages() calls with different page pool
+allocator API based on different use case:
+1. page_pool_alloc_pages(): allocate memory without page splitting when driver
+   knows that the memory it need is always bigger than half of the page
+   allocated from page pool. There is no cache line dirtying for 'struct page'
+   when a page is recycled back to the page pool.
+
+2. page_pool_alloc_frag(): allocate memory with page splitting when driver knows
+   that the memory it need is always smaller than or equal to half of the page
+   allocated from page pool. Page splitting enables memory saving and thus avoid
+   TLB/cache miss for data access, but there also is some cost to implement page
+   splitting, mainly some cache line dirtying/bouncing for 'struct page' and
+   atomic operation for page->pp_frag_count.
+
+3. page_pool_alloc(): allocate memory with or without page splitting depending
+   on the requested memory size when driver doesn't know the size of memory it
+   need beforehand. It is a mix of the above two case, so it is a wrapper of the
+   above API to simplify driver's interface for memory allocation with least
+   memory utilization and performance penalty.
 
 API keeps track of in-flight pages, in order to let API user know
 when it is safe to free a page_pool object.  Thus, API users
@@ -92,6 +108,12 @@ a page will cause no race conditions is enough.
 
 * page_pool_dev_alloc_pages(): Get a page from the page allocator or page_pool
   caches.
+
+* page_pool_dev_alloc_frag(): Get a page frag from the page allocator or
+  page_pool caches.
+
+* page_pool_dev_alloc(): Get a page or page frag from the page allocator or
+  page_pool caches.
 
 * page_pool_get_dma_addr(): Retrieve the stored DMA address.
 

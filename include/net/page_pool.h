@@ -5,28 +5,6 @@
  *	Copyright (C) 2016 Red Hat, Inc.
  */
 
-/**
- * DOC: page_pool allocator
- *
- * This page_pool allocator is optimized for the XDP mode that
- * uses one-frame-per-page, but have fallbacks that act like the
- * regular page allocator APIs.
- *
- * Basic use involve replacing alloc_pages() calls with the
- * page_pool_alloc_pages() call.  Drivers should likely use
- * page_pool_dev_alloc_pages() replacing dev_alloc_pages().
- *
- * API keeps track of in-flight pages, in-order to let API user know
- * when it is safe to dealloactor page_pool object.  Thus, API users
- * must make sure to call page_pool_release_page() when a page is
- * "leaving" the page_pool.  Or call page_pool_put_page() where
- * appropiate.  For maintaining correct accounting.
- *
- * API user must only call page_pool_put_page() once on a page, as it
- * will either recycle the page, or in case of elevated refcnt, it
- * will release the DMA mapping and in-flight state accounting.  We
- * hope to lift this requirement in the future.
- */
 #ifndef _NET_PAGE_POOL_H
 #define _NET_PAGE_POOL_H
 

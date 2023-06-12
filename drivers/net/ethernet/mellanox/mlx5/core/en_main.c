@@ -832,6 +832,16 @@ static int mlx5e_alloc_rq(struct mlx5e_params *params,
 		/* Create a page_pool and register it with rxq */
 		struct page_pool_params pp_params = { 0 };
 
+		/* Return error here to avoid writing to page->pp_frag_count in
+		 * mlx5e_page_release_fragmented() for page->pp_frag_count is
+		 * not usable for arch with PAGE_POOL_DMA_USE_PP_FRAG_COUNT
+		 * being true.
+		 */
+		if (PAGE_POOL_DMA_USE_PP_FRAG_COUNT) {
+			err = -EINVAL;
+			goto err_free_by_rq_type;
+		}
+
 		pp_params.order     = 0;
 		pp_params.flags     = PP_FLAG_DMA_MAP | PP_FLAG_DMA_SYNC_DEV | PP_FLAG_PAGE_FRAG;
 		pp_params.pool_size = pool_size;

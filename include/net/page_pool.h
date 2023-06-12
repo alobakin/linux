@@ -33,6 +33,7 @@
 #include <linux/mm.h> /* Needed by ptr_ring */
 #include <linux/ptr_ring.h>
 #include <linux/dma-direction.h>
+#include <linux/dma-mapping.h>
 
 #define PP_FLAG_DMA_MAP		BIT(0) /* Should page_pool do the DMA
 					* map/unmap
@@ -49,6 +50,9 @@
 #define PP_FLAG_ALL		(PP_FLAG_DMA_MAP |\
 				 PP_FLAG_DMA_SYNC_DEV |\
 				 PP_FLAG_PAGE_FRAG)
+
+#define PAGE_POOL_DMA_USE_PP_FRAG_COUNT	\
+		(sizeof(dma_addr_t) > sizeof(unsigned long))
 
 /*
  * Fast allocation side cache array/stack
@@ -219,8 +223,33 @@ static inline struct page *page_pool_dev_alloc_pages(struct page_pool *pool)
 	return page_pool_alloc_pages(pool, gfp);
 }
 
-struct page *page_pool_alloc_frag(struct page_pool *pool, unsigned int *offset,
-				  unsigned int size, gfp_t gfp);
+struct page *__page_pool_alloc_frag(struct page_pool *pool,
+				    unsigned int *offset, unsigned int size,
+				    gfp_t gfp);
+
+static inline struct page *page_pool_alloc_frag(struct page_pool *pool,
+						unsigned int *offset,
+						unsigned int size, gfp_t gfp)
+{
+	unsigned int max_size = PAGE_SIZE << pool->p.order;
+
+	size = ALIGN(size, dma_get_cache_alignment());
+
+	if (WARN_ON(!(pool->p.flags & PP_FLAG_PAGE_FRAG) ||
+		    size > max_size))
+		return NULL;
+
+	/* Don't allow page splitting and allocate one big frag
+	 * for 32-bit arch with 64-bit DMA, corresponding to
+	 * the checking in page_pool_is_last_frag().
+	 */
+	if (PAGE_POOL_DMA_USE_PP_FRAG_COUNT) {
+		*offset = 0;
+		return page_pool_alloc_pages(pool, gfp);
+	}
+
+	return __page_pool_alloc_frag(pool, offset, size, gfp);
+}
 
 static inline struct page *page_pool_dev_alloc_frag(struct page_pool *pool,
 						    unsigned int *offset,
@@ -322,8 +351,14 @@ static inline long page_pool_defrag_page(struct page *page, long nr)
 static inline bool page_pool_is_last_frag(struct page_pool *pool,
 					  struct page *page)
 {
-	/* If fragments aren't enabled or count is 0 we were the last user */
+	/* We assume we are the last frag user that is still holding
+	 * on to the page if:
+	 * 1. Fragments aren't enabled.
+	 * 2. We are running in 32-bit arch with 64-bit DMA.
+	 * 3. page_pool_defrag_page() indicate we are the last user.
+	 */
 	return !(pool->p.flags & PP_FLAG_PAGE_FRAG) ||
+	       PAGE_POOL_DMA_USE_PP_FRAG_COUNT ||
 	       (page_pool_defrag_page(page, 1) == 0);
 }
 
@@ -356,9 +391,6 @@ static inline void page_pool_recycle_direct(struct page_pool *pool,
 {
 	page_pool_put_full_page(pool, page, true);
 }
-
-#define PAGE_POOL_DMA_USE_PP_FRAG_COUNT	\
-		(sizeof(dma_addr_t) > sizeof(unsigned long))
 
 static inline dma_addr_t page_pool_get_dma_addr(struct page *page)
 {

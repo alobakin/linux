@@ -14,7 +14,6 @@
 #include <net/xdp.h>
 
 #include <linux/dma-direction.h>
-#include <linux/dma-mapping.h>
 #include <linux/page-flags.h>
 #include <linux/mm.h> /* for put_page() */
 #include <linux/poison.h>
@@ -199,10 +198,6 @@ static int page_pool_init(struct page_pool *pool,
 		 * offset used by the DMA engine to start copying rx data
 		 */
 	}
-
-	if (PAGE_POOL_DMA_USE_PP_FRAG_COUNT &&
-	    pool->p.flags & PP_FLAG_PAGE_FRAG)
-		return -EINVAL;
 
 #ifdef CONFIG_PAGE_POOL_STATS
 	pool->recycle_stats = alloc_percpu(struct page_pool_recycle_stats);
@@ -715,18 +710,13 @@ static void page_pool_free_frag(struct page_pool *pool)
 	page_pool_return_page(pool, page);
 }
 
-struct page *page_pool_alloc_frag(struct page_pool *pool,
-				  unsigned int *offset,
-				  unsigned int size, gfp_t gfp)
+struct page *__page_pool_alloc_frag(struct page_pool *pool,
+				    unsigned int *offset,
+				    unsigned int size, gfp_t gfp)
 {
 	unsigned int max_size = PAGE_SIZE << pool->p.order;
 	struct page *page = pool->frag_page;
 
-	if (WARN_ON(!(pool->p.flags & PP_FLAG_PAGE_FRAG) ||
-		    size > max_size))
-		return NULL;
-
-	size = ALIGN(size, dma_get_cache_alignment());
 	*offset = pool->frag_offset;
 
 	if (page && *offset + size > max_size) {
@@ -759,7 +749,7 @@ frag_reset:
 	alloc_stat_inc(pool, fast);
 	return page;
 }
-EXPORT_SYMBOL(page_pool_alloc_frag);
+EXPORT_SYMBOL(__page_pool_alloc_frag);
 
 static void page_pool_empty_ring(struct page_pool *pool)
 {

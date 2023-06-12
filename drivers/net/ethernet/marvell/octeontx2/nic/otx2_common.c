@@ -1431,7 +1431,7 @@ int otx2_pool_init(struct otx2_nic *pfvf, u16 pool_id,
 		return 0;
 	}
 
-	pp_params.flags = PP_FLAG_PAGE_FRAG | PP_FLAG_DMA_MAP;
+	pp_params.flags = PP_FLAG_DMA_MAP;
 	pp_params.pool_size = numptrs;
 	pp_params.nid = NUMA_NO_NODE;
 	pp_params.dev = pfvf->dev;

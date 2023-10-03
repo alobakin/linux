@@ -290,6 +290,10 @@ struct idpf_vport {
 	struct idpf_tx_queue **txqs;
 	bool crc_enable;
 
+	bool xdpq_share;
+	u16 num_xdp_txq;
+	u16 xdp_txq_offset;
+
 	u16 num_rxq;
 	u16 num_bufq;
 	u32 rxq_desc_count;
@@ -372,8 +376,10 @@ struct idpf_vport_user_config_data {
 	struct idpf_rss_data rss_data;
 	u16 num_req_tx_qs;
 	u16 num_req_rx_qs;
+	u16 num_req_xdp_qs;
 	u32 num_req_txq_desc;
 	u32 num_req_rxq_desc;
+	struct xdp_attachment_info xdp;
 	DECLARE_BITMAP(user_flags, __IDPF_USER_FLAGS_NBITS);
 	struct list_head mac_filter_list;
 };
@@ -585,6 +591,18 @@ static inline int idpf_is_queue_model_split(u16 q_model)
 {
 	return !IS_ENABLED(CONFIG_IDPF_SINGLEQ) ||
 	       q_model == VIRTCHNL2_QUEUE_MODEL_SPLIT;
+}
+
+/**
+ * idpf_xdp_is_prog_ena - check if there is an XDP program on adapter
+ * @vport: vport to check
+ */
+static inline bool idpf_xdp_is_prog_ena(const struct idpf_vport *vport)
+{
+	if (!vport->adapter)
+		return false;
+
+	return !!vport->adapter->vport_config[vport->idx]->user_config.xdp.prog;
 }
 
 #define idpf_is_cap_ena(adapter, field, flag) \

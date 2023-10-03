@@ -5,6 +5,7 @@
 
 #include "idpf.h"
 #include "idpf_virtchnl.h"
+#include "xdp.h"
 
 static const struct net_device_ops idpf_netdev_ops;
 
@@ -743,7 +744,8 @@ static int idpf_cfg_netdev(struct idpf_vport *vport)
 
 	netdev = libeth_netdev_alloc(sizeof(struct idpf_netdev_priv),
 				     vport_config->max_q.max_rxq,
-				     vport_config->max_q.max_txq);
+				     vport_config->max_q.max_txq,
+				     IDPF_LARGE_MAX_Q);
 	if (!netdev)
 		return -ENOMEM;
 
@@ -902,6 +904,7 @@ static void idpf_vport_stop(struct idpf_vport *vport)
 
 	vport->link_up = false;
 	idpf_vport_intr_deinit(vport);
+	idpf_xdp_rxq_info_deinit_all(vport);
 	idpf_vport_queues_rel(vport);
 	idpf_vport_intr_rel(vport);
 	np->state = __IDPF_VPORT_DOWN;
@@ -1374,20 +1377,29 @@ static int idpf_vport_open(struct idpf_vport *vport)
 	}
 
 	idpf_rx_init_buf_tail(vport);
+
+	err = idpf_xdp_rxq_info_init_all(vport);
+	if (err) {
+		netdev_err(vport->netdev,
+			   "Failed to initialize XDP RxQ info for vport %u: %pe\n",
+			   vport->vport_id, ERR_PTR(err));
+		goto intr_deinit;
+	}
+
 	idpf_vport_intr_ena(vport);
 
 	err = idpf_send_config_queues_msg(vport);
 	if (err) {
 		dev_err(&adapter->pdev->dev, "Failed to configure queues for vport %u, %d\n",
 			vport->vport_id, err);
-		goto intr_deinit;
+		goto rxq_deinit;
 	}
 
 	err = idpf_send_map_unmap_queue_vector_msg(vport, true);
 	if (err) {
 		dev_err(&adapter->pdev->dev, "Failed to map queue vectors for vport %u: %d\n",
 			vport->vport_id, err);
-		goto intr_deinit;
+		goto rxq_deinit;
 	}
 
 	err = idpf_send_enable_queues_msg(vport);
@@ -1435,6 +1447,8 @@ disable_queues:
 	idpf_send_disable_queues_msg(vport);
 unmap_queue_vectors:
 	idpf_send_map_unmap_queue_vector_msg(vport, false);
+rxq_deinit:
+	idpf_xdp_rxq_info_deinit_all(vport);
 intr_deinit:
 	idpf_vport_intr_deinit(vport);
 queues_rel:
@@ -1908,7 +1922,8 @@ int idpf_initiate_soft_reset(struct idpf_vport *vport,
 		idpf_vport_alloc_vec_indexes(vport);
 
 	err = libeth_set_real_num_queues(vport->netdev, vport->num_rxq,
-					 vport->num_txq);
+					 vport->num_txq - vport->num_xdp_txq,
+					 vport->num_xdp_txq);
 	if (err)
 		goto err_open;
 

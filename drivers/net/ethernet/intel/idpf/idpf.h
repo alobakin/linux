@@ -834,6 +834,9 @@ int idpf_req_rel_vector_indexes(struct idpf_adapter *adapter,
 void idpf_set_ethtool_ops(struct net_device *netdev);
 void idpf_vport_intr_write_itr(struct idpf_q_vector *q_vector,
 			       u16 itr, bool tx);
+
+int idpf_vport_open(struct idpf_vport *vport, bool alloc_res);
+void idpf_vport_stop(struct idpf_vport *vport);
 int idpf_sriov_configure(struct pci_dev *pdev, int num_vfs);
 
 u8 idpf_vport_get_hsplit(const struct idpf_vport *vport);

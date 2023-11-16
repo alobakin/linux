@@ -127,7 +127,7 @@ struct page_pool {
 
 	bool has_init_callback;
 
-	long frag_users;
+	long frag_users __aligned(4 * sizeof(long));
 	struct page *frag_page;
 	unsigned int frag_offset;
 	u32 pages_state_hold_cnt;

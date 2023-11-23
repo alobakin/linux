@@ -52,6 +52,8 @@
 #ifndef _NET_PAGE_POOL_HELPERS_H
 #define _NET_PAGE_POOL_HELPERS_H
 
+#include <linux/dma-mapping.h>
+
 #include <net/page_pool/types.h>
 
 #ifdef CONFIG_PAGE_POOL_STATS
@@ -354,6 +356,11 @@ static inline void page_pool_free_va(struct page_pool *pool, void *va,
 	page_pool_put_page(pool, virt_to_head_page(va), -1, allow_direct);
 }
 
+/* Occupies page::dma_addr[0:0] and indicates whether the mapping needs to be
+ * synchronized (either for device, for CPU, or both).
+ */
+#define PAGE_POOL_DMA_ADDR_NEED_SYNC		BIT(0)
+
 /**
  * page_pool_get_dma_addr() - Retrieve the stored DMA address.
  * @page:	page allocated from a page pool
@@ -363,27 +370,66 @@ static inline void page_pool_free_va(struct page_pool *pool, void *va,
  */
 static inline dma_addr_t page_pool_get_dma_addr(struct page *page)
 {
-	dma_addr_t ret = page->dma_addr;
+	dma_addr_t ret = page->dma_addr & ~PAGE_POOL_DMA_ADDR_NEED_SYNC;
 
 	if (PAGE_POOL_32BIT_ARCH_WITH_64BIT_DMA)
-		ret <<= PAGE_SHIFT;
+		ret <<= PAGE_SHIFT - 1;
 
 	return ret;
 }
 
-static inline bool page_pool_set_dma_addr(struct page *page, dma_addr_t addr)
+/**
+ * page_pool_set_dma_addr - save the obtained DMA address for @page
+ * @pool: &page_pool this page belongs to and was mapped by
+ * @page: page to save the address for
+ * @addr: DMA address to save
+ *
+ * If the pool was created with the DMA synchronization enabled, it will test
+ * whether the address needs to be synced and store the result as well to
+ * conserve CPU cycles.
+ *
+ * Return: false if the address doesn't fit into the corresponding field and
+ * thus can't be stored, true on success.
+ */
+static inline bool page_pool_set_dma_addr(const struct page_pool *pool,
+					  struct page *page,
+					  dma_addr_t addr)
 {
+	unsigned long val = addr;
+
+	if (unlikely(!addr)) {
+		page->dma_addr = 0;
+		return true;
+	}
+
 	if (PAGE_POOL_32BIT_ARCH_WITH_64BIT_DMA) {
-		page->dma_addr = addr >> PAGE_SHIFT;
+		val = addr >> (PAGE_SHIFT - 1);
 
 		/* We assume page alignment to shave off bottom bits,
 		 * if this "compression" doesn't work we need to drop.
 		 */
-		return addr != (dma_addr_t)page->dma_addr << PAGE_SHIFT;
+		if (addr != (dma_addr_t)val << (PAGE_SHIFT - 1))
+			return false;
 	}
 
-	page->dma_addr = addr;
-	return false;
+	if (pool->dma_sync && dma_need_sync(pool->p.dev, addr))
+		val |= PAGE_POOL_DMA_ADDR_NEED_SYNC;
+
+	page->dma_addr = val;
+
+	return true;
+}
+
+/**
+ * page_pool_dma_addr_need_sync - check whether a mapped page needs DMA syncs
+ * @page: page to check
+ *
+ * Return: the result previously saved by page_pool_set_dma_addr() to skip
+ * synchronization when not needed.
+ */
+static inline bool page_pool_dma_addr_need_sync(const struct page *page)
+{
+	return page->dma_addr & PAGE_POOL_DMA_ADDR_NEED_SYNC;
 }
 
 static inline bool page_pool_put(struct page_pool *pool)

@@ -366,10 +366,10 @@ static bool page_pool_dma_map(struct page_pool *pool, struct page *page)
 	if (dma_mapping_error(pool->p.dev, dma))
 		return false;
 
-	if (page_pool_set_dma_addr(page, dma))
+	if (!page_pool_set_dma_addr(pool, page, dma))
 		goto unmap_failed;
 
-	if (pool->dma_sync)
+	if (page_pool_dma_addr_need_sync(page))
 		page_pool_dma_sync_for_device(pool, page, pool->p.max_len);
 
 	return true;
@@ -545,7 +545,7 @@ static void page_pool_return_page(struct page_pool *pool, struct page *page)
 	dma_unmap_page_attrs(pool->p.dev, dma,
 			     PAGE_SIZE << pool->p.order, pool->p.dma_dir,
 			     DMA_ATTR_SKIP_CPU_SYNC | DMA_ATTR_WEAK_ORDERING);
-	page_pool_set_dma_addr(page, 0);
+	page_pool_set_dma_addr(pool, page, 0);
 skip_dma_unmap:
 	page_pool_clear_pp_info(page);
 
@@ -622,7 +622,7 @@ __page_pool_put_page(struct page_pool *pool, struct page *page,
 	if (likely(page_ref_count(page) == 1 && !page_is_pfmemalloc(page))) {
 		/* Read barrier done in page_ref_count / READ_ONCE */
 
-		if (pool->dma_sync)
+		if (page_pool_dma_addr_need_sync(page))
 			page_pool_dma_sync_for_device(pool, page,
 						      dma_sync_size);
 
@@ -735,7 +735,7 @@ static struct page *page_pool_drain_frag(struct page_pool *pool,
 		return NULL;
 
 	if (page_ref_count(page) == 1 && !page_is_pfmemalloc(page)) {
-		if (pool->dma_sync)
+		if (page_pool_dma_addr_need_sync(page))
 			page_pool_dma_sync_for_device(pool, page, -1);
 
 		return page;

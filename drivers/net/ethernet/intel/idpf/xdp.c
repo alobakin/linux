@@ -4,6 +4,7 @@
 #include "idpf.h"
 #include "idpf_virtchnl.h"
 #include "xdp.h"
+#include "xsk.h"
 
 static int idpf_rxq_for_each(const struct idpf_vport *vport,
 			     int (*fn)(struct idpf_rx_queue *rxq, void *arg),
@@ -70,6 +71,11 @@ static int __idpf_xdp_rxq_info_init(struct idpf_rx_queue *rxq, void *arg)
 	return 0;
 }
 
+int idpf_xdp_rxq_info_init(struct idpf_rx_queue *rxq)
+{
+	return __idpf_xdp_rxq_info_init(rxq, NULL);
+}
+
 /**
  * idpf_xdp_rxq_info_init_all - initialize RxQ info for all Rx queues in vport
  * @vport: vport to setup the info
@@ -99,6 +105,11 @@ static int __idpf_xdp_rxq_info_deinit(struct idpf_rx_queue *rxq, void *arg)
 	xdp_rxq_info_unreg(&rxq->xdp_rxq);
 
 	return 0;
+}
+
+void idpf_xdp_rxq_info_deinit(struct idpf_rx_queue *rxq, u32 model)
+{
+	__idpf_xdp_rxq_info_deinit(rxq, (void *)(size_t)model);
 }
 
 /**
@@ -541,6 +552,9 @@ int idpf_xdp(struct net_device *dev, struct netdev_bpf *xdp)
 	switch (xdp->command) {
 	case XDP_SETUP_PROG:
 		ret = idpf_xdp_setup_prog(vport, xdp);
+		break;
+	case XDP_SETUP_XSK_POOL:
+		ret = idpf_xsk_pool_setup(vport, xdp);
 		break;
 	default:
 notsupp:

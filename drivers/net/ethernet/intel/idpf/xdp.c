@@ -443,7 +443,9 @@ void idpf_xdp_set_features(const struct idpf_vport *vport)
 	if (!idpf_is_queue_model_split(vport->rxq_model))
 		return;
 
-	libeth_xdp_set_features_noredir(vport->netdev, &idpf_xdpmo);
+	libeth_xdp_set_features_noredir(vport->netdev, &idpf_xdpmo,
+					idpf_get_max_tx_bufs(vport->adapter),
+					libeth_xsktmo);
 }
 
 /**

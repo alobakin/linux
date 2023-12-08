@@ -16,6 +16,9 @@ struct idpf_vport_max_q;
 #include <linux/bitfield.h>
 #include <linux/sctp.h>
 #include <linux/ethtool.h>
+#include <linux/bpf_trace.h>
+#include <linux/filter.h>
+#include <linux/bpf.h>
 #include <net/gro.h>
 #include <linux/dim.h>
 
@@ -376,6 +379,13 @@ struct idpf_vport {
 	struct idpf_queue **txqs;
 	bool crc_enable;
 
+	int num_xdp_txq;
+	int num_xdp_rxq;
+	int num_xdp_complq;
+	int xdp_txq_offset;
+	int xdp_rxq_offset;
+	int xdp_complq_offset;
+
 	u16 num_rxq;
 	u16 num_bufq;
 	u32 rxq_desc_count;
@@ -423,6 +433,7 @@ struct idpf_vport {
  * @__IDPF_USER_FLAGS_NBITS: Must be last
  */
 enum idpf_user_flags {
+	__IDPF_PRIV_FLAGS_HDR_SPLIT = 0,
 	__IDPF_PROMISC_UC = 32,
 	__IDPF_PROMISC_MC,
 
@@ -466,6 +477,8 @@ struct idpf_vport_user_config_data {
 	u16 num_req_rx_qs;
 	u32 num_req_txq_desc;
 	u32 num_req_rxq_desc;
+	/* Duplicated in queue structure for performance reasons */
+	struct bpf_prog *xdp_prog;
 	DECLARE_BITMAP(user_flags, __IDPF_USER_FLAGS_NBITS);
 	struct list_head mac_filter_list;
 };
@@ -682,6 +695,18 @@ struct idpf_adapter {
 static inline int idpf_is_queue_model_split(u16 q_model)
 {
 	return q_model == VIRTCHNL2_QUEUE_MODEL_SPLIT;
+}
+
+/**
+ * idpf_xdp_is_prog_ena - check if there is an XDP program on adapter
+ * @vport: vport to check
+ */
+static inline bool idpf_xdp_is_prog_ena(struct idpf_vport *vport)
+{
+	if (!vport->adapter)
+		return false;
+
+	return !!vport->adapter->vport_config[vport->idx]->user_config.xdp_prog;
 }
 
 #define idpf_is_cap_ena(adapter, field, flag) \
@@ -939,6 +964,7 @@ int idpf_recv_mb_msg(struct idpf_adapter *adapter, u32 op,
 int idpf_send_mb_msg(struct idpf_adapter *adapter, u32 op,
 		     u16 msg_size, u8 *msg);
 void idpf_set_ethtool_ops(struct net_device *netdev);
+void idpf_vport_set_hsplit(struct idpf_vport *vport, bool ena);
 int idpf_vport_alloc_max_qs(struct idpf_adapter *adapter,
 			    struct idpf_vport_max_q *max_q);
 void idpf_vport_dealloc_max_qs(struct idpf_adapter *adapter,

@@ -900,6 +900,8 @@ static void idpf_get_ethtool_stats(struct net_device *netdev,
 
 			if (!txq)
 				idpf_add_empty_queue_stats(&data, qtype);
+			else if (test_bit(__IDPF_Q_XDP, txq->flags))
+				continue;
 			else
 				idpf_add_queue_stats(&data, txq);
 		}

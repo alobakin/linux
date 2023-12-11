@@ -4,7 +4,6 @@
 #ifndef __LIBETH_STATS_H
 #define __LIBETH_STATS_H
 
-#include <linux/skbuff.h>
 #include <linux/unroll.h>
 
 #include <net/libeth/types.h>

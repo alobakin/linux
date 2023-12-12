@@ -484,6 +484,11 @@ static void idpf_rx_buf_rel_bufq(struct idpf_buf_queue *bufq)
 	if (!bufq->buf)
 		return;
 
+	if (idpf_queue_has(XSK, bufq)) {
+		idpf_xsk_buf_rel(bufq);
+		return;
+	}
+
 	/* Free all the bufs allocated and given to hw on Rx queue */
 	for (u32 i = 0; i < bufq->desc_count; i++)
 		idpf_rx_page_rel(&bufq->buf[i]);
@@ -533,12 +538,14 @@ static void idpf_rx_desc_rel(struct idpf_rx_queue *rxq,
 	if (!rxq)
 		return;
 
-	libeth_xdp_return_stash(&rxq->xdp);
+	if (!idpf_queue_has(XSK, rxq))
+		libeth_xdp_return_stash(&rxq->xdp);
 
 	if (!idpf_is_queue_model_split(model))
 		idpf_rx_buf_rel_all(rxq);
 
 	libeth_rq_stats_deinit(dev, rxq->idx);
+	idpf_xsk_clear_queue(rxq, VIRTCHNL2_QUEUE_TYPE_RX);
 
 	rxq->next_to_alloc = 0;
 	rxq->next_to_clean = 0;
@@ -563,6 +570,7 @@ static void idpf_rx_desc_rel_bufq(struct idpf_buf_queue *bufq,
 		return;
 
 	idpf_rx_buf_rel_bufq(bufq);
+	idpf_xsk_clear_queue(bufq, VIRTCHNL2_QUEUE_TYPE_RX_BUFFER);
 
 	bufq->next_to_alloc = 0;
 	bufq->next_to_clean = 0;
@@ -851,6 +859,9 @@ static int idpf_rx_bufs_init(struct idpf_buf_queue *bufq,
 	};
 	int ret;
 
+	if (idpf_queue_has(XSK, bufq))
+		return idpf_xsk_bufs_init(bufq);
+
 	ret = libeth_rx_fq_create(&fq, &bufq->q_vector->napi);
 	if (ret)
 		return ret;
@@ -944,6 +955,7 @@ static int idpf_rx_desc_alloc(const struct idpf_vport *vport,
 	rxq->next_to_use = 0;
 	idpf_queue_set(GEN_CHK, rxq);
 
+	idpf_xsk_setup_queue(vport, rxq, VIRTCHNL2_QUEUE_TYPE_RX);
 	libeth_rq_stats_init(vport->netdev, &rxq->stats, rxq->idx);
 
 	return 0;
@@ -973,6 +985,8 @@ static int idpf_bufq_desc_alloc(const struct idpf_vport *vport,
 	bufq->next_to_use = 0;
 
 	idpf_queue_set(GEN_CHK, bufq);
+
+	idpf_xsk_setup_queue(vport, bufq, VIRTCHNL2_QUEUE_TYPE_RX_BUFFER);
 
 	return 0;
 }
@@ -3658,9 +3672,9 @@ __idpf_rx_process_skb_fields(struct idpf_rx_queue *rxq, struct sk_buff *skb,
 	return 0;
 }
 
-static bool idpf_rx_process_skb_fields(struct sk_buff *skb,
-				       const struct libeth_xdp_buff *xdp,
-				       struct libeth_rq_napi_stats *ss)
+bool idpf_rx_process_skb_fields(struct sk_buff *skb,
+				const struct libeth_xdp_buff *xdp,
+				struct libeth_rq_napi_stats *ss)
 {
 	struct idpf_rx_queue *rxq;
 
@@ -4487,7 +4501,9 @@ static bool idpf_rx_splitq_clean_all(struct idpf_q_vector *q_vec, int budget,
 		struct idpf_rx_queue *rxq = q_vec->rx[i];
 		int pkts_cleaned_per_q;
 
-		pkts_cleaned_per_q = idpf_rx_splitq_clean(rxq, budget_per_q);
+		pkts_cleaned_per_q = idpf_queue_has(XSK, rxq) ?
+				     idpf_clean_rx_irq_zc(rxq, budget_per_q) :
+				     idpf_rx_splitq_clean(rxq, budget_per_q);
 		/* if we clean as many as budgeted, we must not be done */
 		if (pkts_cleaned_per_q >= budget_per_q)
 			clean_complete = false;
@@ -4497,8 +4513,10 @@ static bool idpf_rx_splitq_clean_all(struct idpf_q_vector *q_vec, int budget,
 
 	nid = numa_mem_id();
 
-	for (i = 0; i < q_vec->num_bufq; i++)
-		idpf_rx_clean_refillq_all(q_vec->bufq[i], nid);
+	for (i = 0; i < q_vec->num_bufq; i++) {
+		if (!idpf_queue_has(XSK, q_vec->bufq[i]))
+			idpf_rx_clean_refillq_all(q_vec->bufq[i], nid);
+	}
 
 	return clean_complete;
 }

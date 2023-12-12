@@ -9,6 +9,47 @@
 
 static void idpf_xsk_tx_timer(struct work_struct *work);
 
+static void idpf_xsk_setup_rxq(const struct idpf_vport *vport,
+			       struct idpf_rx_queue *rxq)
+{
+	struct xsk_buff_pool *pool;
+
+	pool = xsk_get_pool_from_qid(vport->netdev, rxq->idx);
+	if (!pool || !pool->dev || !xsk_buff_can_alloc(pool, 1))
+		return;
+
+	rxq->pool = pool;
+
+	idpf_queue_set(XSK, rxq);
+}
+
+static void idpf_xsk_setup_bufq(const struct idpf_vport *vport,
+				struct idpf_buf_queue *bufq)
+{
+	struct xsk_buff_pool *pool;
+	u32 qid = U32_MAX;
+
+	for (u32 i = 0; i < vport->num_rxq_grp; i++) {
+		const struct idpf_rxq_group *grp = &vport->rxq_grps[i];
+
+		for (u32 j = 0; j < vport->num_bufqs_per_qgrp; j++) {
+			if (&grp->splitq.bufq_sets[j].bufq == bufq) {
+				qid = grp->splitq.rxq_sets[0]->rxq.idx;
+				goto setup;
+			}
+		}
+	}
+
+setup:
+	pool = xsk_get_pool_from_qid(vport->netdev, qid);
+	if (!pool || !pool->dev || !xsk_buff_can_alloc(pool, 1))
+		return;
+
+	bufq->pool = pool;
+
+	idpf_queue_set(XSK, bufq);
+}
+
 static void idpf_xsk_setup_txq(const struct idpf_vport *vport,
 			       struct idpf_tx_queue *txq)
 {
@@ -70,6 +111,12 @@ void idpf_xsk_setup_queue(const struct idpf_vport *vport, void *q,
 		return;
 
 	switch (type) {
+	case VIRTCHNL2_QUEUE_TYPE_RX:
+		idpf_xsk_setup_rxq(vport, q);
+		break;
+	case VIRTCHNL2_QUEUE_TYPE_RX_BUFFER:
+		idpf_xsk_setup_bufq(vport, q);
+		break;
 	case VIRTCHNL2_QUEUE_TYPE_TX:
 		idpf_xsk_setup_txq(vport, q);
 		break;
@@ -84,9 +131,25 @@ void idpf_xsk_setup_queue(const struct idpf_vport *vport, void *q,
 void idpf_xsk_clear_queue(void *q, enum virtchnl2_queue_type type)
 {
 	struct idpf_compl_queue *complq;
+	struct idpf_buf_queue *bufq;
+	struct idpf_rx_queue *rxq;
 	struct idpf_tx_queue *txq;
 
 	switch (type) {
+	case VIRTCHNL2_QUEUE_TYPE_RX:
+		rxq = q;
+		if (!idpf_queue_has_clear(XSK, rxq))
+			return;
+
+		rxq->pool = NULL;
+		break;
+	case VIRTCHNL2_QUEUE_TYPE_RX_BUFFER:
+		bufq = q;
+		if (!idpf_queue_has_clear(XSK, bufq))
+			return;
+
+		bufq->pool = NULL;
+		break;
 	case VIRTCHNL2_QUEUE_TYPE_TX:
 		txq = q;
 		if (!idpf_queue_has_clear(XSK, txq))
@@ -102,6 +165,124 @@ void idpf_xsk_clear_queue(void *q, enum virtchnl2_queue_type type)
 	default:
 		break;
 	}
+}
+
+static void idpf_xskfqe_init(const struct libeth_xskfq_fp *fq, u32 i)
+{
+	struct virtchnl2_splitq_rx_buf_desc *desc = fq->descs;
+
+	desc = &desc[i];
+#ifdef __LIBETH_WORD_ACCESS
+	*(u64 *)&desc->qword0 = i;
+#else
+	desc->qword0.buf_id = cpu_to_le16(i);
+#endif
+	desc->pkt_addr = cpu_to_le64(libeth_xsk_buff_xdp_get_dma(fq->fqes[i]));
+}
+
+/**
+ * __idpf_alloc_rx_buffers_zc - allocate a number of Rx buffers
+ * @bufq: buffer queue
+ * @count: The number of buffers to allocate
+ *
+ * Place the @count of descriptors onto buffer queue. Handle the queue wrap
+ * for case where space from next_to_use up to the end of ring is less
+ * than @count. Finally do a tail bump.
+ *
+ * Returns true if all allocations were successful, false if any fail.
+ */
+static bool __idpf_alloc_rx_buffers_zc(struct idpf_buf_queue *bufq, u32 count)
+{
+	struct libeth_xskfq_fp fq = {
+		.pool	= bufq->pool,
+		.fqes	= bufq->xsk_buf,
+		.descs	= bufq->split_buf,
+		.ntu	= bufq->next_to_use,
+		.count	= bufq->desc_count,
+	};
+	u32 done;
+
+	done = libeth_xskfqe_alloc(&fq, count, idpf_xskfqe_init);
+	writel(fq.ntu, bufq->tail);
+
+	bufq->next_to_use = fq.ntu;
+	bufq->pending -= done;
+
+	return done == count;
+}
+
+/**
+ * idpf_alloc_rx_buffers_zc - allocate a number of Rx buffers
+ * @bufq: buffer queue
+ *
+ * Wrapper for internal allocation routine; figure out how many tail
+ * bumps should take place based on the given threshold
+ *
+ * Returns true if all calls to internal alloc routine succeeded
+ */
+static bool idpf_alloc_rx_buffers_zc(struct idpf_buf_queue *bufq)
+{
+	u32 count, rx_thresh = bufq->thresh;
+
+	count = ALIGN_DOWN(bufq->pending - 1, rx_thresh);
+
+	for (u32 i = 0; i < count; i += rx_thresh) {
+		if (unlikely(!__idpf_alloc_rx_buffers_zc(bufq, rx_thresh)))
+			return false;
+	}
+
+	return true;
+}
+
+/**
+ * idpf_xsk_bufs_init - allocate a number of Rx buffers with logs
+ * @bufq: buffer queue
+ *
+ * Wrapper for internal allocation routine; Prints out logs, if allocation
+ * did not go as expected
+ */
+int idpf_xsk_bufs_init(struct idpf_buf_queue *bufq)
+{
+	struct libeth_xskfq fq = {
+		.pool	= bufq->pool,
+		.count	= bufq->desc_count,
+		.nid	= idpf_q_vector_to_mem(bufq->q_vector),
+	};
+	int ret;
+
+	ret = libeth_xskfq_create(&fq);
+	if (ret)
+		return ret;
+
+	bufq->xsk_buf = fq.fqes;
+	bufq->pending = fq.pending;
+	bufq->thresh = fq.thresh;
+	bufq->rx_buf_size = fq.buf_len;
+
+	if (!idpf_alloc_rx_buffers_zc(bufq))
+		netdev_err(bufq->pool->netdev,
+			   "failed to allocate XSk buffers for qid %d\n",
+			   bufq->pool->queue_id);
+
+	bufq->next_to_alloc = bufq->next_to_use;
+
+	idpf_queue_clear(HSPLIT_EN, bufq);
+	bufq->rx_hbuf_size = 0;
+
+	return 0;
+}
+
+void idpf_xsk_buf_rel(struct idpf_buf_queue *bufq)
+{
+	struct libeth_xskfq fq = {
+		.fqes	= bufq->xsk_buf,
+	};
+
+	libeth_xskfq_destroy(&fq);
+
+	bufq->rx_buf_size = fq.buf_len;
+	bufq->thresh = fq.thresh;
+	bufq->pending = fq.pending;
 }
 
 /**
@@ -221,6 +402,31 @@ finalize:
 	return done_frames;
 }
 
+static u32 idpf_xsk_tx_prep(void *_xdpq, struct libeth_xdpsq *sq)
+{
+	struct idpf_tx_queue *xdpq = _xdpq;
+	u32 free;
+
+	libeth_xdpsq_lock(&xdpq->xdp_lock);
+
+	free = xdpq->desc_count - xdpq->pending;
+	if (unlikely(free < xdpq->thresh))
+		free += idpf_clean_xdp_irq_zc(xdpq, NAPI_POLL_WEIGHT);
+
+	*sq = (struct libeth_xdpsq){
+		.pool		= xdpq->pool,
+		.sqes		= xdpq->tx_buf,
+		.descs		= xdpq->desc_ring,
+		.count		= xdpq->desc_count,
+		.lock		= &xdpq->xdp_lock,
+		.ntu		= &xdpq->next_to_use,
+		.pending	= &xdpq->pending,
+		.xdp_tx		= &xdpq->xdp_tx,
+	};
+
+	return free;
+}
+
 static u32 idpf_xsk_xmit_prep(void *_xdpq, struct libeth_xdpsq *sq)
 {
 	struct idpf_tx_queue *xdpq = _xdpq;
@@ -265,7 +471,136 @@ bool idpf_xsk_xmit(struct idpf_tx_queue *xsksq)
 
 LIBETH_XDP_DEFINE_START();
 LIBETH_XDP_DEFINE_TIMER(static idpf_xsk_tx_timer, idpf_clean_xdp_irq_zc);
+LIBETH_XSK_DEFINE_FLUSH_TX(static idpf_xsk_tx_flush_bulk, idpf_xsk_tx_prep,
+			   idpf_xdp_tx_xmit);
+LIBETH_XSK_DEFINE_RUN(static idpf_xsk_run_pass, idpf_xsk_run_prog,
+		      idpf_xsk_tx_flush_bulk, idpf_rx_process_skb_fields);
+LIBETH_XSK_DEFINE_FINALIZE(static idpf_xsk_finalize_rx, idpf_xsk_tx_flush_bulk,
+			   idpf_xdp_tx_finalize);
 LIBETH_XDP_DEFINE_END();
+
+struct idpf_xsk_refill_set {
+	struct {
+		struct idpf_buf_queue	*q;
+		u32			buf_id;
+		u32			pending;
+	} bufqs[IDPF_MAX_BUFQS_PER_RXQ_GRP];
+};
+
+static bool idpf_xsk_refill(const struct idpf_xsk_refill_set *set)
+{
+	bool ret = true;
+
+	for (u32 i = 0; i < ARRAY_SIZE(set->bufqs); i++) {
+		struct idpf_buf_queue *bufq = set->bufqs[i].q;
+		u32 ntc;
+
+		if (!bufq)
+			continue;
+
+		ntc = set->bufqs[i].buf_id;
+		if (unlikely(++ntc == bufq->desc_count))
+			ntc = 0;
+
+		bufq->next_to_clean = ntc;
+		bufq->pending += set->bufqs[i].pending;
+
+		if (bufq->pending > bufq->thresh)
+			ret &= idpf_alloc_rx_buffers_zc(bufq);
+	}
+
+	return ret;
+}
+
+/**
+ * idpf_clean_rx_irq_zc - consumes packets from the hardware queue
+ * @rxq: AF_XDP Rx queue
+ * @budget: NAPI budget
+ *
+ * Returns number of processed packets on success, remaining budget on failure.
+ */
+int idpf_clean_rx_irq_zc(struct idpf_rx_queue *rxq, u32 budget)
+{
+	struct libeth_rq_napi_stats rs = { };
+	struct idpf_xsk_refill_set set = { };
+	struct libeth_xdp_tx_bulk bq;
+	bool wake, gen, fail = false;
+	u32 ntc = rxq->next_to_clean;
+	struct libeth_xdp_buff *xdp;
+	u32 cnt = rxq->desc_count;
+
+	wake = xsk_uses_need_wakeup(rxq->pool);
+	if (wake)
+		xsk_clear_rx_need_wakeup(rxq->pool);
+
+	gen = idpf_queue_has(GEN_CHK, rxq);
+
+	libeth_xsk_tx_init_bulk(&bq, rxq->xdp_prog, rxq->xdp_rxq.dev,
+				rxq->xdpqs, rxq->num_xdp_txq);
+	xdp = rxq->xsk;
+
+	while (likely(rs.packets < budget)) {
+		const struct virtchnl2_rx_flex_desc_adv_nic_3 *rx_desc;
+		struct idpf_xdp_rx_desc desc;
+		struct idpf_buf_queue *bufq;
+		u32 bufq_id, buf_id;
+
+		rx_desc = &rxq->rx[ntc].flex_adv_nic_3_wb;
+
+		idpf_xdp_get_qw0(&desc, rx_desc);
+		if (idpf_xdp_rx_gen(&desc) != gen)
+			break;
+
+		dma_rmb();
+
+		bufq_id = idpf_xdp_rx_bufq(&desc);
+		bufq = set.bufqs[bufq_id].q;
+		if (!bufq) {
+			bufq = &rxq->bufq_sets[bufq_id].bufq;
+			set.bufqs[bufq_id].q = bufq;
+		}
+
+		idpf_xdp_get_qw1(&desc, rx_desc);
+		buf_id = idpf_xdp_rx_buf(&desc);
+
+		set.bufqs[bufq_id].buf_id = buf_id;
+		set.bufqs[bufq_id].pending++;
+
+		xdp = libeth_xsk_process_buff(xdp, bufq->xsk_buf[buf_id],
+					      idpf_xdp_rx_len(&desc));
+
+		if (unlikely(++ntc == cnt)) {
+			ntc = 0;
+			gen = !gen;
+			idpf_queue_change(GEN_CHK, rxq);
+		}
+
+		if (!idpf_xdp_rx_eop(&desc) || unlikely(!xdp))
+			continue;
+
+		fail = !idpf_xsk_run_pass(xdp, &bq, rxq->napi, &rs, rx_desc);
+		xdp = NULL;
+
+		if (fail)
+			break;
+	}
+
+	rxq->next_to_clean = ntc;
+	rxq->xsk = xdp;
+
+	idpf_xsk_finalize_rx(&bq);
+	fail |= !idpf_xsk_refill(&set);
+
+	libeth_rq_napi_stats_add(&rxq->stats, &rs);
+
+	if (!wake)
+		return unlikely(fail) ? budget : rs.packets;
+
+	if (unlikely(fail))
+		xsk_set_rx_need_wakeup(rxq->pool);
+
+	return rs.packets;
+}
 
 /**
  * idpf_xsk_pool_setup - set up an XSk pool
@@ -280,6 +615,16 @@ int idpf_xsk_pool_setup(struct idpf_vport *vport, struct netdev_bpf *bpf)
 	u32 qid = bpf->xsk.queue_id;
 	bool restart;
 	int ret;
+
+	if (pool && !IS_ALIGNED(xsk_pool_get_rx_frame_size(pool),
+				LIBETH_RX_BUF_STRIDE)) {
+		NL_SET_ERR_MSG_FMT_MOD(bpf->extack,
+				       "%s: HW doesn't support frames sizes not aligned to %u (qid %u: %u)",
+				       netdev_name(vport->netdev),
+				       LIBETH_RX_BUF_STRIDE, qid,
+				       xsk_pool_get_rx_frame_size(pool));
+		return -EINVAL;
+	}
 
 	ret = libeth_xsk_setup_pool(vport->netdev, qid, pool);
 	if (ret) {

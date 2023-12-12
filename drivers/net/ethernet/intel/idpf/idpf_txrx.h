@@ -704,8 +704,8 @@ struct idpf_tx_queue {
 	__cacheline_group_end_aligned(read_mostly);
 
 	__cacheline_group_begin_aligned(read_write);
-	u16 next_to_use;
-	u16 next_to_clean;
+	u32 next_to_use;
+	u32 next_to_clean;
 
 	union {
 		struct {
@@ -748,7 +748,7 @@ struct idpf_tx_queue {
  * hardcode any assumptions.
  */
 libeth_cacheline_set_assert(struct idpf_tx_queue, 64,
-			    4 + offsetofend(struct idpf_tx_queue, q_stats) -
+			    8 + offsetofend(struct idpf_tx_queue, q_stats) -
 			    offsetofend(struct idpf_tx_queue, next_to_clean),
 			    24);
 

@@ -2,8 +2,11 @@
 /* Copyright (c) 2019, Intel Corporation. */
 
 #include <linux/bpf_trace.h>
+#include <linux/unroll.h>
+
 #include <net/xdp_sock_drv.h>
 #include <net/xdp.h>
+
 #include "ice.h"
 #include "ice_base.h"
 #include "ice_type.h"
@@ -994,9 +997,9 @@ static void ice_xmit_pkt_batch(struct ice_tx_ring *xdp_ring, struct xdp_desc *de
 {
 	u16 ntu = xdp_ring->next_to_use;
 	struct ice_tx_desc *tx_desc;
-	u32 i;
 
-	loop_unrolled_for(i = 0; i < PKTS_PER_BATCH; i++) {
+	unrolled_count(PKTS_PER_BATCH)
+	for (u32 i = 0; i < PKTS_PER_BATCH; i++) {
 		dma_addr_t dma;
 
 		dma = xsk_buff_raw_get_dma(xdp_ring->xsk_pool, descs[i].addr);

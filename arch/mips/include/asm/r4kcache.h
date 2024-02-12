@@ -13,6 +13,7 @@
 #define _ASM_R4KCACHE_H
 
 #include <linux/stringify.h>
+#include <linux/unroll.h>
 
 #include <asm/asm.h>
 #include <asm/asm-eva.h>
@@ -22,7 +23,6 @@
 #include <asm/cpu-type.h>
 #include <asm/mipsmtregs.h>
 #include <asm/mmzone.h>
-#include <asm/unroll.h>
 
 extern void r5k_sc_init(void);
 extern void rm7k_sc_init(void);
@@ -194,7 +194,8 @@ static inline void invalidate_tcache_page(unsigned long addr)
 
 #define cache_unroll(times, insn, op, addr, lsize) do {			\
 	int i = 0;							\
-	unroll(times, _cache_op, insn, op, (addr) + (i++ * (lsize)));	\
+	unrolled_call(times, _cache_op, insn, op,			\
+		      (addr) + (i++ * (lsize)));			\
 } while (0)
 
 /* build blast_xxx, blast_xxx_page, blast_xxx_page_indexed */

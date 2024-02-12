@@ -14,14 +14,6 @@
  */
 #define PKTS_PER_BATCH 4
 
-#ifdef __clang__
-#define loop_unrolled_for _Pragma("clang loop unroll_count(4)") for
-#elif __GNUC__ >= 8
-#define loop_unrolled_for _Pragma("GCC unroll 4") for
-#else
-#define loop_unrolled_for for
-#endif
-
 struct i40e_ring;
 struct i40e_vsi;
 struct net_device;

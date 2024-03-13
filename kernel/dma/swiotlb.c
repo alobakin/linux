@@ -1286,6 +1286,16 @@ static unsigned long mem_used(struct io_tlb_mem *mem)
 
 #endif /* CONFIG_DEBUG_FS */
 
+static inline void swiotlb_disable_dma_skip_sync(struct device *dev)
+{
+	/*
+	 * If dma_skip_sync was set, reset it to false on first SWIOTLB buffer
+	 * mapping/allocation to always sync SWIOTLB buffers.
+	 */
+	if (unlikely(dma_skip_sync(dev)))
+		dma_set_skip_sync(dev, false);
+}
+
 phys_addr_t swiotlb_tbl_map_single(struct device *dev, phys_addr_t orig_addr,
 		size_t mapping_size, size_t alloc_size,
 		unsigned int alloc_align_mask, enum dma_data_direction dir,
@@ -1322,6 +1332,8 @@ phys_addr_t swiotlb_tbl_map_single(struct device *dev, phys_addr_t orig_addr,
 				 alloc_size, mem->nslabs, mem_used(mem));
 		return (phys_addr_t)DMA_MAPPING_ERROR;
 	}
+
+	swiotlb_disable_dma_skip_sync(dev);
 
 	/*
 	 * Save away the mapping from the original address to the DMA address.
@@ -1639,6 +1651,8 @@ struct page *swiotlb_alloc(struct device *dev, size_t size)
 	index = swiotlb_find_slots(dev, 0, size, 0, &pool);
 	if (index == -1)
 		return NULL;
+
+	swiotlb_disable_dma_skip_sync(dev);
 
 	tlb_addr = slot_addr(pool->start, index);
 

@@ -78,6 +78,7 @@ struct dma_map_ops {
 			int nents, enum dma_data_direction dir);
 	void (*cache_sync)(struct device *dev, void *vaddr, size_t size,
 			enum dma_data_direction direction);
+	bool (*can_skip_sync)(struct device *dev);
 	int (*dma_supported)(struct device *dev, u64 mask);
 	u64 (*get_required_mask)(struct device *dev);
 	size_t (*max_mapping_size)(struct device *dev);
@@ -110,6 +111,22 @@ static inline void set_dma_ops(struct device *dev,
 {
 }
 #endif /* CONFIG_DMA_OPS */
+
+#ifdef CONFIG_DMA_NEED_SYNC
+
+static inline void dma_set_skip_sync(struct device *dev, bool skip)
+{
+	dev->dma_skip_sync = skip;
+}
+
+void dma_setup_skip_sync(struct device *dev);
+
+#else /* !CONFIG_DMA_NEED_SYNC */
+
+#define dma_set_skip_sync(dev, skip)		do { } while (0)
+#define dma_setup_skip_sync(dev)		do { } while (0)
+
+#endif /* !CONFIG_DMA_NEED_SYNC */
 
 #ifdef CONFIG_DMA_CMA
 extern struct cma *dma_contiguous_default_area;

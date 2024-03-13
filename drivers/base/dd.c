@@ -642,6 +642,8 @@ re_probe:
 			goto pinctrl_bind_failed;
 	}
 
+	dma_setup_skip_sync(dev);
+
 	ret = driver_sysfs_add(dev);
 	if (ret) {
 		pr_err("%s: driver_sysfs_add(%s) failed\n",

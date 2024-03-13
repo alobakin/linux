@@ -61,14 +61,14 @@ void idpf_tx_timeout(struct net_device *netdev, unsigned int txqueue)
  */
 static void idpf_tx_buf_rel(struct idpf_queue *tx_q, struct idpf_tx_buf *tx_buf)
 {
-	if (tx_buf->skb) {
+	if (tx_buf->type == IDPF_TX_BUF_SKB) {
 		if (dma_unmap_len(tx_buf, len))
 			dma_unmap_single(tx_q->dev,
 					 dma_unmap_addr(tx_buf, dma),
 					 dma_unmap_len(tx_buf, len),
 					 DMA_TO_DEVICE);
 		dev_kfree_skb_any(tx_buf->skb);
-	} else if (dma_unmap_len(tx_buf, len)) {
+	} else if (tx_buf->type == IDPF_TX_BUF_FRAG) {
 		dma_unmap_page(tx_q->dev,
 			       dma_unmap_addr(tx_buf, dma),
 			       dma_unmap_len(tx_buf, len),
@@ -77,6 +77,8 @@ static void idpf_tx_buf_rel(struct idpf_queue *tx_q, struct idpf_tx_buf *tx_buf)
 
 	tx_buf->next_to_watch = NULL;
 	tx_buf->skb = NULL;
+	tx_buf->nr_frags = 0;
+	tx_buf->type = IDPF_TX_BUF_EMPTY;
 	tx_buf->compl_tag = IDPF_SPLITQ_TX_INVAL_COMPL_TAG;
 	dma_unmap_len_set(tx_buf, len, 0);
 }
@@ -87,11 +89,24 @@ static void idpf_tx_buf_rel(struct idpf_queue *tx_q, struct idpf_tx_buf *tx_buf)
  */
 static void idpf_tx_buf_rel_all(struct idpf_queue *txq)
 {
-	u16 i;
+	struct idpf_tx_stash *stash;
+	struct hlist_node *tmp;
+	u16 i, tag;
 
 	/* Buffers already cleared, nothing to do */
 	if (!txq->tx_buf)
 		return;
+
+	/* If a TX timeout occurred, there are potentially still bufs in the
+	 * hash table, free them here.
+	 */
+	hash_for_each_safe(txq->sched_buf_hash, tag, tmp, stash, hlist) {
+		if (stash) {
+			idpf_tx_buf_rel(txq, &stash->buf);
+			hash_del(&stash->hlist);
+			idpf_buf_lifo_push(&txq->buf_stack, stash);
+		}
+	}
 
 	/* Free all the Tx buffer sk_buffs */
 	for (i = 0; i < txq->desc_count; i++)
@@ -174,10 +189,6 @@ static int idpf_tx_buf_alloc_all(struct idpf_queue *tx_q)
 	tx_q->tx_buf = kzalloc(buf_size, GFP_KERNEL);
 	if (!tx_q->tx_buf)
 		return -ENOMEM;
-
-	/* Initialize tx_bufs with invalid completion tags */
-	for (i = 0; i < tx_q->desc_count; i++)
-		tx_q->tx_buf[i].compl_tag = IDPF_SPLITQ_TX_INVAL_COMPL_TAG;
 
 	/* Initialize tx buf stack for out-of-order completions if
 	 * flow scheduling offload is enabled
@@ -1490,7 +1501,7 @@ static void idpf_tx_splitq_clean_hdr(struct idpf_queue *tx_q,
 	}
 
 	/* clear tx_buf data */
-	tx_buf->skb = NULL;
+	tx_buf->type = IDPF_TX_BUF_EMPTY;
 
 	cleaned->bytes += tx_buf->bytecount;
 	cleaned->packets += tx_buf->gso_segs;
@@ -1514,13 +1525,15 @@ static void idpf_tx_clean_stashed_bufs(struct idpf_queue *txq, u16 compl_tag,
 	/* Buffer completion */
 	hash_for_each_possible_safe(txq->sched_buf_hash, stash, tmp_buf,
 				    hlist, compl_tag) {
-		if (unlikely(stash->buf.compl_tag != (int)compl_tag))
+		if (unlikely(stash->buf.compl_tag != compl_tag))
 			continue;
 
-		if (stash->buf.skb) {
+		hash_del(&stash->hlist); // TODO: move back to the end if needed
+
+		if (stash->buf.type == IDPF_TX_BUF_SKB) {
 			idpf_tx_splitq_clean_hdr(txq, &stash->buf, cleaned,
 						 budget);
-		} else if (dma_unmap_len(&stash->buf, len)) {
+		} else if (stash->buf.type == IDPF_TX_BUF_FRAG) {
 			dma_unmap_page(txq->dev,
 				       dma_unmap_addr(&stash->buf, dma),
 				       dma_unmap_len(&stash->buf, len),
@@ -1530,8 +1543,6 @@ static void idpf_tx_clean_stashed_bufs(struct idpf_queue *txq, u16 compl_tag,
 
 		/* Push shadow buf back onto stack */
 		idpf_buf_lifo_push(&txq->buf_stack, stash);
-
-		hash_del(&stash->hlist);
 	}
 }
 
@@ -1546,8 +1557,7 @@ static int idpf_stash_flow_sch_buffers(struct idpf_queue *txq,
 {
 	struct idpf_tx_stash *stash;
 
-	if (unlikely(!dma_unmap_addr(tx_buf, dma) &&
-		     !dma_unmap_len(tx_buf, len)))
+	if (unlikely(tx_buf->type <= IDPF_TX_BUF_RSVD))
 		return 0;
 
 	stash = idpf_buf_lifo_pop(&txq->buf_stack);
@@ -1562,6 +1572,8 @@ static int idpf_stash_flow_sch_buffers(struct idpf_queue *txq,
 	stash->buf.skb = tx_buf->skb;
 	stash->buf.bytecount = tx_buf->bytecount;
 	stash->buf.gso_segs = tx_buf->gso_segs;
+	stash->buf.type = tx_buf->type;
+	stash->buf.nr_frags = tx_buf->nr_frags;
 	dma_unmap_addr_set(&stash->buf, dma, dma_unmap_addr(tx_buf, dma));
 	dma_unmap_len_set(&stash->buf, len, dma_unmap_len(tx_buf, len));
 	stash->buf.compl_tag = tx_buf->compl_tag;
@@ -1569,19 +1581,16 @@ static int idpf_stash_flow_sch_buffers(struct idpf_queue *txq,
 	/* Add buffer to buf_hash table to be freed later */
 	hash_add(txq->sched_buf_hash, &stash->hlist, stash->buf.compl_tag);
 
-	memset(tx_buf, 0, sizeof(struct idpf_tx_buf));
-
-	/* Reinitialize buf_id portion of tag */
-	tx_buf->compl_tag = IDPF_SPLITQ_TX_INVAL_COMPL_TAG;
+	tx_buf->type = IDPF_TX_BUF_EMPTY;
+	tx_buf->nr_frags = 0;
 
 	return 0;
 }
 
 #define idpf_tx_splitq_clean_bump_ntc(txq, ntc, desc, buf)	\
 do {								\
-	(ntc)++;						\
-	if (unlikely(!(ntc))) {					\
-		ntc -= (txq)->desc_count;			\
+	if (unlikely(++(ntc) == (txq)->desc_count)) {		\
+		ntc = 0;					\
 		buf = (txq)->tx_buf;				\
 		desc = IDPF_FLEX_TX_DESC(txq, 0);		\
 	} else {						\
@@ -1605,63 +1614,66 @@ do {								\
  * Separate packet completion events will be reported on the completion queue,
  * and the buffers will be cleaned separately. The stats are not updated from
  * this function when using flow-based scheduling.
+ *
+ * Furthermore, in flow scheduling mode, check to make sure there are enough
+ * reserve buffers to stash the packet. If there are not, return early, which
+ * will leave next_to_clean pointing to the packet that failed to be stashed.
+ * Return false in this scenario. Otherwise, return true.
  */
-static void idpf_tx_splitq_clean(struct idpf_queue *tx_q, u16 end,
+static bool idpf_tx_splitq_clean(struct idpf_queue *tx_q, u16 end,
 				 int napi_budget,
 				 struct idpf_cleaned_stats *cleaned,
 				 bool descs_only)
 {
 	union idpf_tx_flex_desc *next_pending_desc = NULL;
 	union idpf_tx_flex_desc *tx_desc;
-	s16 ntc = tx_q->next_to_clean;
+	u16 ntc = tx_q->next_to_clean;
 	struct idpf_tx_buf *tx_buf;
+	bool clean_complete = true;
 
 	tx_desc = IDPF_FLEX_TX_DESC(tx_q, ntc);
 	next_pending_desc = IDPF_FLEX_TX_DESC(tx_q, end);
 	tx_buf = &tx_q->tx_buf[ntc];
-	ntc -= tx_q->desc_count;
 
 	while (tx_desc != next_pending_desc) {
-		union idpf_tx_flex_desc *eop_desc;
+		u16 eop_idx;
 
 		/* If this entry in the ring was used as a context descriptor,
-		 * it's corresponding entry in the buffer ring will have an
-		 * invalid completion tag since no buffer was used.  We can
-		 * skip this descriptor since there is no buffer to clean.
+		 * it's corresponding entry in the buffer ring is reserved.  We
+		 * can skip this descriptor since there is no buffer to clean.
 		 */
-		if (unlikely(tx_buf->compl_tag == IDPF_SPLITQ_TX_INVAL_COMPL_TAG))
+		if (tx_buf->type <= IDPF_TX_BUF_RSVD)
 			goto fetch_next_txq_desc;
 
-		eop_desc = (union idpf_tx_flex_desc *)tx_buf->next_to_watch;
-
-		/* clear next_to_watch to prevent false hangs */
-		tx_buf->next_to_watch = NULL;
+		if (unlikely(tx_buf->type != IDPF_TX_BUF_SKB))
+			break;
+		eop_idx = tx_buf->eop_idx;
 
 		if (descs_only) {
-			if (idpf_stash_flow_sch_buffers(tx_q, tx_buf))
+			if (IDPF_TX_BUF_RSV_UNUSED(tx_q) < tx_buf->nr_frags) {
+				clean_complete = false;
 				goto tx_splitq_clean_out;
+			}
 
-			while (tx_desc != eop_desc) {
+			idpf_stash_flow_sch_buffers(tx_q, tx_buf);
+
+			while (ntc != eop_idx) {
 				idpf_tx_splitq_clean_bump_ntc(tx_q, ntc,
 							      tx_desc, tx_buf);
 
-				if (dma_unmap_len(tx_buf, len)) {
-					if (idpf_stash_flow_sch_buffers(tx_q,
-									tx_buf))
-						goto tx_splitq_clean_out;
-				}
+				idpf_stash_flow_sch_buffers(tx_q, tx_buf);
 			}
 		} else {
 			idpf_tx_splitq_clean_hdr(tx_q, tx_buf, cleaned,
 						 napi_budget);
 
 			/* unmap remaining buffers */
-			while (tx_desc != eop_desc) {
+			while (ntc != eop_idx) {
 				idpf_tx_splitq_clean_bump_ntc(tx_q, ntc,
 							      tx_desc, tx_buf);
 
 				/* unmap any remaining paged data */
-				if (dma_unmap_len(tx_buf, len)) {
+				if (tx_buf->type == IDPF_TX_BUF_FRAG) {
 					dma_unmap_page(tx_q->dev,
 						       dma_unmap_addr(tx_buf, dma),
 						       dma_unmap_len(tx_buf, len),
@@ -1676,8 +1688,9 @@ fetch_next_txq_desc:
 	}
 
 tx_splitq_clean_out:
-	ntc += tx_q->desc_count;
 	tx_q->next_to_clean = ntc;
+
+	return clean_complete;
 }
 
 #define idpf_tx_clean_buf_ring_bump_ntc(txq, ntc, buf)	\
@@ -1708,16 +1721,21 @@ static bool idpf_tx_clean_buf_ring(struct idpf_queue *txq, u16 compl_tag,
 {
 	u16 idx = compl_tag & txq->compl_tag_bufid_m;
 	struct idpf_tx_buf *tx_buf = NULL;
-	u16 ntc = txq->next_to_clean;
-	u16 num_descs_cleaned = 0;
-	u16 orig_idx = idx;
+	u16 ntc, orig_idx = idx;
 
 	tx_buf = &txq->tx_buf[idx];
 
-	while (tx_buf->compl_tag == (int)compl_tag) {
-		if (tx_buf->skb) {
-			idpf_tx_splitq_clean_hdr(txq, tx_buf, cleaned, budget);
-		} else if (dma_unmap_len(tx_buf, len)) {
+	if (unlikely(tx_buf->type <= IDPF_TX_BUF_RSVD ||
+		     tx_buf->compl_tag != compl_tag))
+		return false;
+
+	if (tx_buf->type == IDPF_TX_BUF_SKB)
+		idpf_tx_splitq_clean_hdr(txq, tx_buf, cleaned, budget);
+
+	idpf_tx_clean_buf_ring_bump_ntc(txq, idx, tx_buf);
+
+	while (tx_buf->compl_tag == compl_tag) {
+		if (tx_buf->type == IDPF_TX_BUF_FRAG) {
 			dma_unmap_page(txq->dev,
 				       dma_unmap_addr(tx_buf, dma),
 				       dma_unmap_len(tx_buf, len),
@@ -1725,38 +1743,46 @@ static bool idpf_tx_clean_buf_ring(struct idpf_queue *txq, u16 compl_tag,
 			dma_unmap_len_set(tx_buf, len, 0);
 		}
 
-		memset(tx_buf, 0, sizeof(struct idpf_tx_buf));
-		tx_buf->compl_tag = IDPF_SPLITQ_TX_INVAL_COMPL_TAG;
+		tx_buf->type = IDPF_TX_BUF_EMPTY;
 
-		num_descs_cleaned++;
 		idpf_tx_clean_buf_ring_bump_ntc(txq, idx, tx_buf);
 	}
 
-	/* If we didn't clean anything on the ring for this completion, there's
-	 * nothing more to do.
+	/* It's possible the packet we just cleaned was an out of order
+	 * completion, which means we can we can stash the buffers starting
+	 * from the original next_to_clean and reuse the descriptors. We need
+	 * to compare the descriptor ring next_to_clean packet's "first" buffer
+	 * to the "first" buffer of the packet we just cleaned to determine if
+	 * this is the case. Howevever, next_to_clean can point to either a
+	 * reserved buffer that corresponds to a context descriptor used for the
+	 * next_to_clean packet (TSO packet) or the "first" buffer (single
+	 * packet). The orig_idx from the packet we just cleaned will always
+	 * point to the "first" buffer. If next_to_clean points to a reserved
+	 * buffer, let's bump ntc once and start the comparison from there.
 	 */
-	if (unlikely(!num_descs_cleaned))
-		return false;
-
-	/* Otherwise, if we did clean a packet on the ring directly, it's safe
-	 * to assume that the descriptors starting from the original
-	 * next_to_clean up until the previously cleaned packet can be reused.
-	 * Therefore, we will go back in the ring and stash any buffers still
-	 * in the ring into the hash table to be cleaned later.
-	 */
+	ntc = txq->next_to_clean;
 	tx_buf = &txq->tx_buf[ntc];
-	while (tx_buf != &txq->tx_buf[orig_idx]) {
-		idpf_stash_flow_sch_buffers(txq, tx_buf);
-		idpf_tx_clean_buf_ring_bump_ntc(txq, ntc, tx_buf);
-	}
 
-	/* Finally, update next_to_clean to reflect the work that was just done
-	 * on the ring, if any. If the packet was only cleaned from the hash
-	 * table, the ring will not be impacted, therefore we should not touch
-	 * next_to_clean. The updated idx is used here
+	if (tx_buf->type == IDPF_TX_BUF_CTX)
+		idpf_tx_clean_buf_ring_bump_ntc(txq, ntc, tx_buf);
+
+	/* If ntc still points to a different "first" buffer, clean the
+	 * descriptor ring and stash all of the buffers for later cleaning. If
+	 * we cannot stash all of the buffers, next_to_clean will point to the
+	 * "first" buffer of the packet that could not be stashed and cleaning
+	 * will start there next time.
+	 */
+	if (unlikely(tx_buf != &txq->tx_buf[orig_idx] &&
+		     !idpf_tx_splitq_clean(txq, orig_idx, budget, cleaned,
+					   true)))
+		goto clean_buf_ring_out;
+
+	/* Otherwise, update next_to_clean to reflect the cleaning that was
+	 * done above.
 	 */
 	txq->next_to_clean = idx;
 
+clean_buf_ring_out:
 	return true;
 }
 
@@ -1781,7 +1807,9 @@ static void idpf_tx_handle_rs_completion(struct idpf_queue *txq,
 	if (!test_bit(__IDPF_Q_FLOW_SCH_EN, txq->flags)) {
 		u16 head = le16_to_cpu(desc->q_head_compl_tag.q_head);
 
-		return idpf_tx_splitq_clean(txq, head, budget, cleaned, false);
+		idpf_tx_splitq_clean(txq, head, budget, cleaned, false);
+
+		return;
 	}
 
 	compl_tag = le16_to_cpu(desc->q_head_compl_tag.compl_tag);
@@ -2216,7 +2244,9 @@ static void idpf_tx_splitq_map(struct idpf_queue *tx_q,
 		if (dma_mapping_error(tx_q->dev, dma))
 			return idpf_tx_dma_map_error(tx_q, skb, first, i);
 
+		first->nr_frags++;
 		tx_buf->compl_tag = params->compl_tag;
+		tx_buf->type = IDPF_TX_BUF_FRAG;
 
 		/* record length, and DMA address */
 		dma_unmap_len_set(tx_buf, len, size);
@@ -2270,14 +2300,15 @@ static void idpf_tx_splitq_map(struct idpf_queue *tx_q,
 			idpf_tx_splitq_build_desc(tx_desc, params, td_cmd,
 						  max_data);
 
-			tx_desc++;
-			i++;
-
-			if (i == tx_q->desc_count) {
+			if (unlikely(++i == tx_q->desc_count)) {
+				tx_buf = tx_q->tx_buf;
 				tx_desc = IDPF_FLEX_TX_DESC(tx_q, 0);
 				i = 0;
 				tx_q->compl_tag_cur_gen =
 					IDPF_TX_ADJ_COMPL_TAG_GEN(tx_q);
+			} else {
+				tx_buf++;
+				tx_desc++;
 			}
 
 			/* Since this packet has a buffer that is going to span
@@ -2290,8 +2321,7 @@ static void idpf_tx_splitq_map(struct idpf_queue *tx_q,
 			 * simply pass over these holes and finish cleaning the
 			 * rest of the packet.
 			 */
-			memset(&tx_q->tx_buf[i], 0, sizeof(struct idpf_tx_buf));
-			tx_q->tx_buf[i].compl_tag = params->compl_tag;
+			tx_buf->type = IDPF_TX_BUF_EMPTY;
 
 			/* Adjust the DMA offset and the remaining size of the
 			 * fragment.  On the first iteration of this loop,
@@ -2315,13 +2345,15 @@ static void idpf_tx_splitq_map(struct idpf_queue *tx_q,
 			break;
 
 		idpf_tx_splitq_build_desc(tx_desc, params, td_cmd, size);
-		tx_desc++;
-		i++;
 
-		if (i == tx_q->desc_count) {
+		if (unlikely(++i == tx_q->desc_count)) {
+			tx_buf = tx_q->tx_buf;
 			tx_desc = IDPF_FLEX_TX_DESC(tx_q, 0);
 			i = 0;
 			tx_q->compl_tag_cur_gen = IDPF_TX_ADJ_COMPL_TAG_GEN(tx_q);
+		} else {
+			tx_buf++;
+			tx_desc++;
 		}
 
 		size = skb_frag_size(frag);
@@ -2329,20 +2361,18 @@ static void idpf_tx_splitq_map(struct idpf_queue *tx_q,
 
 		dma = skb_frag_dma_map(tx_q->dev, frag, 0, size,
 				       DMA_TO_DEVICE);
-
-		tx_buf = &tx_q->tx_buf[i];
 	}
 
 	/* record SW timestamp if HW timestamp is not available */
 	skb_tx_timestamp(skb);
 
+	first->type = IDPF_TX_BUF_SKB;
+
 	/* write last descriptor with RS and EOP bits */
+	first->eop_idx = i;
 	td_cmd |= params->eop_cmd;
 	idpf_tx_splitq_build_desc(tx_desc, params, td_cmd, size);
 	i = idpf_tx_splitq_bump_ntu(tx_q, i);
-
-	/* set next_to_watch value indicating a packet is present */
-	first->next_to_watch = tx_desc;
 
 	tx_q->txq_grp->num_completions_pending++;
 
@@ -2548,8 +2578,7 @@ idpf_tx_splitq_get_ctx_desc(struct idpf_queue *txq)
 	struct idpf_flex_tx_ctx_desc *desc;
 	int i = txq->next_to_use;
 
-	memset(&txq->tx_buf[i], 0, sizeof(struct idpf_tx_buf));
-	txq->tx_buf[i].compl_tag = IDPF_SPLITQ_TX_INVAL_COMPL_TAG;
+	txq->tx_buf[i].type = IDPF_TX_BUF_CTX;
 
 	/* grab the next descriptor */
 	desc = IDPF_FLEX_TX_CTX_DESC(txq, i);
@@ -3631,6 +3660,7 @@ void idpf_vport_intr_update_itr_ena_irq(struct idpf_q_vector *q_vector)
 					      IDPF_NO_ITR_UPDATE_IDX, 0);
 
 	writel(intval, q_vector->intr_reg.dyn_ctl);
+	q_vector->wb_on_itr = false;
 }
 
 /**
@@ -3922,8 +3952,10 @@ static int idpf_vport_splitq_napi_poll(struct napi_struct *napi, int budget)
 	clean_complete &= idpf_tx_splitq_clean_all(q_vector, budget, &work_done);
 
 	/* If work not completed, return budget and polling will return */
-	if (!clean_complete)
+	if (!clean_complete) {
+		idpf_vport_intr_set_wb_on_itr(q_vector);
 		return budget;
+	}
 
 	work_done = min_t(int, work_done, budget - 1);
 
@@ -3932,6 +3964,8 @@ static int idpf_vport_splitq_napi_poll(struct napi_struct *napi, int budget)
 	 */
 	if (likely(napi_complete_done(napi, work_done)))
 		idpf_vport_intr_update_itr_ena_irq(q_vector);
+	else
+		idpf_vport_intr_set_wb_on_itr(q_vector);
 
 	/* Switch to poll mode in the tear-down path after sending disable
 	 * queues virtchnl message, as the interrupts will be disabled after

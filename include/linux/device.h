@@ -686,6 +686,8 @@ struct device_physical_location {
  *		other devices probe successfully.
  * @dma_coherent: this particular device is dma coherent, even if the
  *		architecture supports non-coherent devices.
+ * @dma_skip_sync: DMA sync operations can be skipped for coherent non-SWIOTLB
+ *		buffers.
  * @dma_ops_bypass: If set to %true then the dma_ops are bypassed for the
  *		streaming DMA operations (->map_* / ->unmap_* / ->sync_*),
  *		and optionall (if the coherent mask is large enough) also
@@ -799,6 +801,9 @@ struct device {
     defined(CONFIG_ARCH_HAS_SYNC_DMA_FOR_CPU) || \
     defined(CONFIG_ARCH_HAS_SYNC_DMA_FOR_CPU_ALL)
 	bool			dma_coherent:1;
+#endif
+#ifdef CONFIG_DMA_NEED_SYNC
+	bool			dma_skip_sync:1;
 #endif
 #ifdef CONFIG_DMA_OPS_BYPASS
 	bool			dma_ops_bypass : 1;

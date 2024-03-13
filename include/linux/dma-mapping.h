@@ -91,6 +91,27 @@ static inline void debug_dma_map_single(struct device *dev, const void *addr,
 }
 #endif /* CONFIG_DMA_API_DEBUG */
 
+#ifdef CONFIG_DMA_NEED_SYNC
+
+static inline bool dma_skip_sync(const struct device *dev)
+{
+	return dev->dma_skip_sync;
+}
+
+bool __dma_need_sync(struct device *dev, dma_addr_t dma_addr);
+
+static inline bool dma_need_sync(struct device *dev, dma_addr_t dma_addr)
+{
+	return dma_skip_sync(dev) ? false : __dma_need_sync(dev, dma_addr);
+}
+
+#else /* !CONFIG_DMA_NEED_SYNC */
+
+#define dma_skip_sync(dev)			true
+#define dma_need_sync(dev, dma_addr)		false
+
+#endif /* !CONFIG_DMA_NEED_SYNC */
+
 #ifdef CONFIG_HAS_DMA
 static inline int dma_mapping_error(struct device *dev, dma_addr_t dma_addr)
 {
@@ -117,14 +138,31 @@ dma_addr_t dma_map_resource(struct device *dev, phys_addr_t phys_addr,
 		size_t size, enum dma_data_direction dir, unsigned long attrs);
 void dma_unmap_resource(struct device *dev, dma_addr_t addr, size_t size,
 		enum dma_data_direction dir, unsigned long attrs);
-void dma_sync_single_for_cpu(struct device *dev, dma_addr_t addr, size_t size,
-		enum dma_data_direction dir);
-void dma_sync_single_for_device(struct device *dev, dma_addr_t addr,
-		size_t size, enum dma_data_direction dir);
-void dma_sync_sg_for_cpu(struct device *dev, struct scatterlist *sg,
-		    int nelems, enum dma_data_direction dir);
-void dma_sync_sg_for_device(struct device *dev, struct scatterlist *sg,
-		       int nelems, enum dma_data_direction dir);
+
+void __dma_sync_single_for_cpu(struct device *dev, dma_addr_t addr,
+			       size_t size, enum dma_data_direction dir);
+void __dma_sync_single_for_device(struct device *dev, dma_addr_t addr,
+				  size_t size, enum dma_data_direction dir);
+void __dma_sync_sg_for_cpu(struct device *dev, struct scatterlist *sg,
+			   int nelems, enum dma_data_direction dir);
+void __dma_sync_sg_for_device(struct device *dev, struct scatterlist *sg,
+			      int nelems, enum dma_data_direction dir);
+
+#define dma_check_sync(op, dev, ...)		\
+	do {					\
+		if (!dma_skip_sync(dev))	\
+			op(dev, __VA_ARGS__);	\
+	} while (0)
+
+#define dma_sync_single_for_cpu(d, a, s, r)				\
+	dma_check_sync(__dma_sync_single_for_cpu, d, a, s, r)
+#define dma_sync_single_for_device(d, a, s, r)				\
+	dma_check_sync(__dma_sync_single_for_device, d, a, s, r)
+#define dma_sync_sg_for_cpu(d, s, n, r)					\
+	dma_check_sync(__dma_sync_sg_for_cpu, d, s, n, r)
+#define dma_sync_sg_for_device(d, s, n, r)				\
+	dma_check_sync(__dma_sync_sg_for_device, d, s, n, r)
+
 void *dma_alloc_attrs(struct device *dev, size_t size, dma_addr_t *dma_handle,
 		gfp_t flag, unsigned long attrs);
 void dma_free_attrs(struct device *dev, size_t size, void *cpu_addr,
@@ -147,7 +185,6 @@ u64 dma_get_required_mask(struct device *dev);
 bool dma_addressing_limited(struct device *dev);
 size_t dma_max_mapping_size(struct device *dev);
 size_t dma_opt_mapping_size(struct device *dev);
-bool dma_need_sync(struct device *dev, dma_addr_t dma_addr);
 unsigned long dma_get_merge_boundary(struct device *dev);
 struct sg_table *dma_alloc_noncontiguous(struct device *dev, size_t size,
 		enum dma_data_direction dir, gfp_t gfp, unsigned long attrs);
@@ -277,10 +314,6 @@ static inline size_t dma_opt_mapping_size(struct device *dev)
 {
 	return 0;
 }
-static inline bool dma_need_sync(struct device *dev, dma_addr_t dma_addr)
-{
-	return false;
-}
 static inline unsigned long dma_get_merge_boundary(struct device *dev)
 {
 	return 0;
@@ -348,19 +381,26 @@ static inline void dma_unmap_single_attrs(struct device *dev, dma_addr_t addr,
 	return dma_unmap_page_attrs(dev, addr, size, dir, attrs);
 }
 
-static inline void dma_sync_single_range_for_cpu(struct device *dev,
-		dma_addr_t addr, unsigned long offset, size_t size,
-		enum dma_data_direction dir)
+static inline void
+__dma_sync_single_range_for_cpu(struct device *dev, dma_addr_t addr,
+				unsigned long offset, size_t size,
+				enum dma_data_direction dir)
 {
-	return dma_sync_single_for_cpu(dev, addr + offset, size, dir);
+	__dma_sync_single_for_cpu(dev, addr + offset, size, dir);
 }
 
-static inline void dma_sync_single_range_for_device(struct device *dev,
-		dma_addr_t addr, unsigned long offset, size_t size,
-		enum dma_data_direction dir)
+static inline void
+__dma_sync_single_range_for_device(struct device *dev, dma_addr_t addr,
+				   unsigned long offset, size_t size,
+				   enum dma_data_direction dir)
 {
-	return dma_sync_single_for_device(dev, addr + offset, size, dir);
+	__dma_sync_single_for_device(dev, addr + offset, size, dir);
 }
+
+#define dma_sync_single_range_for_cpu(d, a, o, s, r)			  \
+	dma_check_sync(__dma_sync_single_range_for_cpu, d, a, o, s, r)
+#define dma_sync_single_range_for_device(d, a, o, s, r)			  \
+	dma_check_sync(__dma_sync_single_range_for_device, d, a, o, s, r)
 
 /**
  * dma_unmap_sgtable - Unmap the given buffer for DMA

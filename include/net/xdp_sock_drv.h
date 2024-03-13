@@ -223,7 +223,7 @@ static inline void xsk_buff_dma_sync_for_cpu(struct xdp_buff *xdp, struct xsk_bu
 {
 	struct xdp_buff_xsk *xskb = container_of(xdp, struct xdp_buff_xsk, xdp);
 
-	if (!pool->dma_need_sync)
+	if (dma_skip_sync(pool->dev))
 		return;
 
 	xp_dma_sync_for_cpu(xskb);

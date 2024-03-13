@@ -170,13 +170,33 @@ union idpf_tx_flex_desc {
 };
 
 /**
+ * enum idpf_tx_buf_type - Type of &idpf_tx_buf to act on Tx completion
+ * @IDPF_TX_BUF_EMPTY: Unused, no action required
+ * @IDPF_TX_BUF_SKB: &sk_buff, unmap and consume_skb(), update stats
+ * @IDPF_TX_BUF_FRAG: Mapped skb, only unmap DMA
+ * @IDPF_TX_BUF_RSVD: Indicates ring entry is reserved, i.e. buffer is empty
+ *		      but should not be used, typically corresponds to context
+ *		      descriptor entry, no action required during cleaning
+#ifdef CONFIG_XDP
+ * @IDPF_TX_BUF_XDP: &xdp_buff, unmap and page_frag_free(), update stats
+#endif
+ */
+enum idpf_tx_buf_type {
+	IDPF_TX_BUF_EMPTY        = 0U,
+	IDPF_TX_BUF_CTX,
+	IDPF_TX_BUF_RSVD,
+	IDPF_TX_BUF_SKB,
+	IDPF_TX_BUF_FRAG,
+};
+
+/**
  * struct idpf_tx_buf
- * @next_to_watch: Next descriptor to clean
+ * @next_to_watch: Next descriptor to clean // TODO: remove
  * @skb: Pointer to the skb
- * @dma: DMA address
- * @len: DMA length
  * @bytecount: Number of bytes
- * @gso_segs: Number of GSO segments
+ * @gso_segs: Number of GSO segments* @eop_idx: Index in descriptor/buffer ring of last buffer for this packet
+ * @nr_frags: Total number of non empty buffers representing this packet
+ * @type: Type of buffer, &idpf_tx_buf_type
  * @compl_tag: Splitq only, unique identifier for a buffer. Used to compare
  *	       with completion tag returned in buffer completion event.
  *	       Because the completion tag is expected to be the same in all
@@ -190,20 +210,22 @@ union idpf_tx_flex_desc {
  * @ctx_entry: Singleq only. Used to indicate the corresponding entry
  *	       in the descriptor ring was used for a context descriptor and
  *	       this buffer entry should be skipped.
+ * @dma: DMA address
+ * @len: DMA length
  */
 struct idpf_tx_buf {
-	void *next_to_watch;
+	void *next_to_watch; //TODO: remove
 	struct sk_buff *skb;
-	DEFINE_DMA_UNMAP_ADDR(dma);
-	DEFINE_DMA_UNMAP_LEN(len);
 	unsigned int bytecount;
 	unsigned short gso_segs;
+	u16 eop_idx;
+	u16 nr_frags:8;
 
-	union {
-		int compl_tag;
-
-		bool ctx_entry;
-	};
+	u16 type:8;
+	u16 compl_tag;
+	bool ctx_entry; // TODO: remove
+	DEFINE_DMA_UNMAP_LEN(len);
+	DEFINE_DMA_UNMAP_ADDR(dma);
 };
 
 struct idpf_tx_stash {
@@ -484,9 +506,11 @@ struct idpf_vec_regs {
  * struct idpf_intr_reg
  * @dyn_ctl: Dynamic control interrupt register
  * @dyn_ctl_intena_m: Mask for dyn_ctl interrupt enable
+ * @dyn_ctl_intena_msk_m: Mask for dyn_ctl interrupt enable mask
  * @dyn_ctl_itridx_s: Register bit offset for ITR index
  * @dyn_ctl_itridx_m: Mask for ITR index
  * @dyn_ctl_intrvl_s: Register bit offset for ITR interval
+ * @dyn_ctl_wb_on_itr_m: Mask for WB on ITR feature
  * @rx_itr: RX ITR register
  * @tx_itr: TX ITR register
  * @icr_ena: Interrupt cause register offset
@@ -495,9 +519,11 @@ struct idpf_vec_regs {
 struct idpf_intr_reg {
 	void __iomem *dyn_ctl;
 	u32 dyn_ctl_intena_m;
+	u32 dyn_ctl_intena_msk_m;
 	u32 dyn_ctl_itridx_s;
 	u32 dyn_ctl_itridx_m;
 	u32 dyn_ctl_intrvl_s;
+	u32 dyn_ctl_wb_on_itr_m;
 	void __iomem *rx_itr;
 	void __iomem *tx_itr;
 	void __iomem *icr_ena;
@@ -510,6 +536,7 @@ struct idpf_intr_reg {
  * @affinity_mask: CPU affinity mask
  * @napi: napi handler
  * @v_idx: Vector index
+ * @wb_on_itr: WB on ITR enabled or not
  * @intr_reg: See struct idpf_intr_reg
  * @num_txq: Number of TX queues
  * @tx: Array of TX queues to service
@@ -533,6 +560,7 @@ struct idpf_q_vector {
 	cpumask_t affinity_mask;
 	struct napi_struct napi;
 	u16 v_idx;
+	bool wb_on_itr;
 	struct idpf_intr_reg intr_reg;
 
 	u16 num_txq;
@@ -971,6 +999,26 @@ static inline void idpf_rx_sync_for_cpu(struct idpf_rx_buf *rx_buf, u32 len)
 				      page_pool_get_dma_addr(page),
 				      rx_buf->page_offset + pp->p.offset, len,
 				      page_pool_get_dma_dir(pp));
+}
+
+/**
+ * idpf_vport_intr_set_wb_on_itr - enable descriptor writeback on disabled interrupts
+ * @q_vector: pointer to queue vector struct
+ */
+static inline void idpf_vport_intr_set_wb_on_itr(struct idpf_q_vector *q_vector)
+{
+	struct idpf_intr_reg *reg;
+
+	if (q_vector->wb_on_itr)
+		return;
+
+	reg = &q_vector->intr_reg;
+
+	writel(reg->dyn_ctl_wb_on_itr_m | reg->dyn_ctl_intena_msk_m |
+	       IDPF_NO_ITR_UPDATE_IDX << reg->dyn_ctl_itridx_s,
+	       reg->dyn_ctl);
+
+	q_vector->wb_on_itr = true;
 }
 
 int idpf_vport_singleq_napi_poll(struct napi_struct *napi, int budget);

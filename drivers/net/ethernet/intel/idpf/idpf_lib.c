@@ -1939,6 +1939,14 @@ int idpf_initiate_soft_reset(struct idpf_vport *vport,
 
 	if (current_state == __IDPF_VPORT_UP)
 		err = idpf_vport_open(vport, false);
+	else
+		/* When the vport is down it shouldn't have allocated queues,
+		 * so release the queues allocated during the soft_reset for
+		 * configuration reasons.
+		 * Queues will be allocated in 'idpf_vport_open()' after
+		 * .ndo_open() callback will be called.
+		 */
+		idpf_vport_queues_rel(vport);
 
 	kfree(new_vport);
 

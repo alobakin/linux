@@ -1965,6 +1965,7 @@ enum netdev_reg_state {
  *			HWTSTAMP_SOURCE_NETDEV
  *	@change_proto_down: device supports setting carrier via IFLA_PROTO_DOWN
  *	@netns_local: interface can't change network namespaces
+ *	@fcoe_mtu:	device supports maximum FCoE MTU, 2158 bytes
  *
  *	@net_notifier_list:	List of per-net netdev notifier block
  *				that follow this device when it is moved
@@ -2358,6 +2359,7 @@ struct net_device {
 	unsigned long		see_all_hwtstamp_requests:1;
 	unsigned long		change_proto_down:1;
 	unsigned long		netns_local:1;
+	unsigned long		fcoe_mtu:1;
 
 	struct list_head	net_notifier_list;
 

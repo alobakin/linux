@@ -1757,6 +1757,7 @@ enum netdev_reg_state {
  *	@lltx:		device supports lockless Tx. Mainly used by logical
  *			interfaces, such as tunnels
  *	@netns_local: interface can't change network namespaces
+ *	@fcoe_mtu:	device supports maximum FCoE MTU, 2158 bytes
  *
  *	@name:	This is the first field of the "visible" part of this structure
  *		(i.e. as seen by users in the "Space.c" file).  It is the name
@@ -2053,6 +2054,7 @@ struct net_device {
 		unsigned long		change_proto_down:1;
 		unsigned long		lltx:1;
 		unsigned long		netns_local:1;
+		unsigned long		fcoe_mtu:1;
 	);
 	const struct net_device_ops *netdev_ops;
 	const struct header_ops *header_ops;

@@ -4,6 +4,7 @@
 #include <net/libeth/netdev.h>
 
 #include "idpf.h"
+#include "xsk.h"
 
 /**
  * idpf_get_rxnfc - command to get RX flow classification rules
@@ -341,6 +342,16 @@ static int idpf_set_ringparam(struct net_device *netdev,
 
 	idpf_vport_ctrl_lock(netdev);
 	vport = idpf_netdev_to_vport(netdev);
+
+	/* If there is a AF_XDP UMEM attached to any of Rx queues,
+	 * disallow changing the number of descriptors -- regardless
+	 * if the netdev is running or not.
+	 */
+	if (idpf_xsk_any_rxq_ena(vport)) {
+		netdev_err(netdev,
+			   "Cannot modify ring parameters while AF_XDP UMEM is attached to any Rx queue\n");
+		return -EBUSY;
+	}
 
 	idx = vport->idx;
 

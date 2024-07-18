@@ -690,3 +690,21 @@ int idpf_xsk_wakeup(struct net_device *dev, u32 qid, u32 flags)
 
 	return 0;
 }
+
+/**
+ * idpf_xsk_any_rxq_ena - Checks if Rx queues have AF_XDP buff pool attached
+ * @vport: vport to be checked
+ *
+ * Returns true if any of the Rx queues has an AF_XDP buff pool attached
+ */
+bool idpf_xsk_any_rxq_ena(struct idpf_vport *vport)
+{
+	int i;
+
+	for (i = 0; i < vport->num_rxq; i++) {
+		if (xsk_get_pool_from_qid(vport->netdev, i))
+			return true;
+	}
+
+	return false;
+}

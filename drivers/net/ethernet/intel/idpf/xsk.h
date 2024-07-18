@@ -30,4 +30,6 @@ bool idpf_xsk_xmit(struct idpf_tx_queue *xsksq);
 int idpf_xsk_pool_setup(struct idpf_vport *vport, struct netdev_bpf *xdp);
 int idpf_xsk_wakeup(struct net_device *dev, u32 qid, u32 flags);
 
+bool idpf_xsk_any_rxq_ena(struct idpf_vport *vport);
+
 #endif /* !_IDPF_XSK_H_ */

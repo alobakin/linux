@@ -467,6 +467,8 @@ void idpf_xdp_set_features(const struct idpf_vport *vport)
 static int
 idpf_xdp_setup_prog(struct idpf_vport *vport, struct netdev_bpf *xdp)
 {
+	struct idpf_netdev_priv *np = netdev_priv(vport->netdev);
+	enum idpf_vport_state current_state = np->state;
 	struct bpf_prog *prog = xdp->prog;
 	struct xdp_attachment_info *info;
 	bool reconfig;
@@ -482,16 +484,31 @@ idpf_xdp_setup_prog(struct idpf_vport *vport, struct netdev_bpf *xdp)
 		return 0;
 	}
 
-	libeth_xdp_set_redirect(vport->netdev, prog);
-
 	ret = idpf_initiate_soft_reset(vport, IDPF_SR_Q_CHANGE);
 	if (ret) {
 		NL_SET_ERR_MSG_MOD(xdp->extack,
 				   "Could not reopen the vport after XDP setup");
+		goto err_reset;
+	}
+
+	libeth_xdp_set_redirect(vport->netdev, prog);
+	return 0;
+
+err_reset:
+	bpf_prog_put(info->prog);
+	info->prog = NULL;
+	info->flags = 0;
+
+	if (idpf_initiate_soft_reset(vport, IDPF_SR_Q_CHANGE)) {
+		NL_SET_ERR_MSG_MOD(xdp->extack,
+				   "Could not restore the vport config after failed XDP setup");
 		return ret;
 	}
 
-	return 0;
+	if (current_state == __IDPF_VPORT_UP)
+		idpf_vport_open(vport);
+
+	return ret;
 }
 
 /**

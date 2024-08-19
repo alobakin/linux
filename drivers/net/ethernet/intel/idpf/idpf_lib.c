@@ -1314,7 +1314,7 @@ static void idpf_rx_init_buf_tail(struct idpf_vport *vport)
  * idpf_vport_open - Bring up a vport
  * @vport: vport to bring up
  */
-static int idpf_vport_open(struct idpf_vport *vport)
+int idpf_vport_open(struct idpf_vport *vport)
 {
 	struct idpf_netdev_priv *np = netdev_priv(vport->netdev);
 	struct idpf_adapter *adapter = vport->adapter;
@@ -1901,7 +1901,7 @@ int idpf_initiate_soft_reset(struct idpf_vport *vport,
 				       new_vport->num_rxq,
 				       new_vport->num_bufq);
 	if (err)
-		goto err_reset;
+		goto free_vport;
 
 	/* Same comment as above regarding avoiding copying the wait_queues and
 	 * mutexes applies here. We do not want to mess with those if possible.
@@ -1915,7 +1915,7 @@ int idpf_initiate_soft_reset(struct idpf_vport *vport,
 					 vport->num_txq - vport->num_xdp_txq,
 					 vport->num_xdp_txq);
 	if (err)
-		goto err_open;
+		goto free_vport;
 
 	if (current_state == __IDPF_VPORT_UP)
 		err = idpf_vport_open(vport);
@@ -1923,14 +1923,6 @@ int idpf_initiate_soft_reset(struct idpf_vport *vport,
 	kfree(new_vport);
 
 	return err;
-
-err_reset:
-	idpf_send_add_queues_msg(vport, vport->num_txq, vport->num_complq,
-				 vport->num_rxq, vport->num_bufq);
-
-err_open:
-	if (current_state == __IDPF_VPORT_UP)
-		idpf_vport_open(vport);
 
 free_vport:
 	kfree(new_vport);

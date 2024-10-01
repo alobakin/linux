@@ -189,6 +189,7 @@ int libeth_rx_fq_create(struct libeth_fq *fq, struct napi_struct *napi)
 	return 0;
 
 err_mem:
+	xdp_unreg_page_pool(pool);
 	kvfree(fqes);
 err_buf:
 	page_pool_destroy(pool);
@@ -205,6 +206,7 @@ void libeth_rx_fq_destroy(struct libeth_fq *fq)
 {
 	xdp_unreg_page_pool(fq->pp);
 	kvfree(fq->fqes);
+	page_pool_destroy(fq->pp);
 }
 EXPORT_SYMBOL_NS_GPL(libeth_rx_fq_destroy, LIBETH);
 

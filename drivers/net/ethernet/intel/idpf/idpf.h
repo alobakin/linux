@@ -290,6 +290,7 @@ struct idpf_vport {
 	struct idpf_tx_queue **txqs;
 	bool crc_enable;
 
+	struct bpf_prog *xdp_prog;
 	bool xdpq_share;
 	u16 num_xdp_txq;
 	u16 xdp_txq_offset;
@@ -599,10 +600,7 @@ static inline int idpf_is_queue_model_split(u16 q_model)
  */
 static inline bool idpf_xdp_is_prog_ena(const struct idpf_vport *vport)
 {
-	if (!vport->adapter)
-		return false;
-
-	return !!vport->adapter->vport_config[vport->idx]->user_config.xdp.prog;
+	return !!vport->xdp_prog;
 }
 
 #define idpf_is_cap_ena(adapter, field, flag) \
@@ -836,6 +834,7 @@ void idpf_vf_dev_ops_init(struct idpf_adapter *adapter);
 int idpf_intr_req(struct idpf_adapter *adapter);
 void idpf_intr_rel(struct idpf_adapter *adapter);
 u16 idpf_get_max_tx_hdr_size(struct idpf_adapter *adapter);
+int idpf_vport_open(struct idpf_vport *vport);
 int idpf_initiate_soft_reset(struct idpf_vport *vport,
 			     enum idpf_vport_reset_cause reset_cause);
 void idpf_deinit_task(struct idpf_adapter *adapter);

@@ -1585,6 +1585,7 @@ void idpf_vport_init_num_qs(struct idpf_vport *vport,
 		config_data->num_req_tx_qs = le16_to_cpu(vport_msg->num_tx_q);
 		config_data->num_req_rx_qs = le16_to_cpu(vport_msg->num_rx_q);
 	}
+	vport->xdp_prog = config_data->xdp.prog;
 
 	if (idpf_is_queue_model_split(vport->txq_model))
 		vport->num_complq = le16_to_cpu(vport_msg->num_tx_complq);
@@ -2098,7 +2099,7 @@ int idpf_vport_queues_alloc(struct idpf_vport *vport)
 	if (err)
 		goto err_out;
 
-	prog = vport->adapter->vport_config[vport->idx]->user_config.xdp.prog;
+	prog = vport->xdp_prog;
 	idpf_copy_xdp_prog_to_qs(vport, prog);
 
 	return 0;

@@ -2127,12 +2127,10 @@ idpf_send_map_unmap_queue_set_vector_msg(const struct idpf_queue_set *qs,
 
 	split = idpf_is_queue_model_split(qs->vport->txq_model);
 
-	for (u32 i = 0; i < qs->num; i++) {
+	for (u32 i = 0, j = 0; i < qs->num; i++) {
 		const struct idpf_queue_ptr *q = &qs->qs[i];
 		const struct idpf_q_vector *vec;
 		u32 qid, v_idx, itr_idx;
-
-		vqv[i].queue_type = cpu_to_le32(q->type);
 
 		switch (q->type) {
 		case VIRTCHNL2_QUEUE_TYPE_RX:
@@ -2147,8 +2145,8 @@ idpf_send_map_unmap_queue_set_vector_msg(const struct idpf_queue_set *qs,
 				v_idx = vec->v_idx;
 				itr_idx = vec->rx_itr_idx;
 			} else {
-				v_idx = 0;
-				itr_idx = VIRTCHNL2_ITR_IDX_0;
+				params.num_chunks--;
+				continue;
 			}
 			break;
 		case VIRTCHNL2_QUEUE_TYPE_TX:
@@ -2167,17 +2165,19 @@ idpf_send_map_unmap_queue_set_vector_msg(const struct idpf_queue_set *qs,
 				v_idx = vec->v_idx;
 				itr_idx = vec->tx_itr_idx;
 			} else {
-				v_idx = 0;
-				itr_idx = VIRTCHNL2_ITR_IDX_1;
+				params.num_chunks--;
+				continue;
 			}
 			break;
 		default:
 			return -EINVAL;
 		}
 
-		vqv[i].queue_id = cpu_to_le32(qid);
-		vqv[i].vector_id = cpu_to_le16(v_idx);
-		vqv[i].itr_idx = cpu_to_le32(itr_idx);
+		vqv[j].queue_type = cpu_to_le32(q->type);
+		vqv[j].queue_id = cpu_to_le32(qid);
+		vqv[j].vector_id = cpu_to_le16(v_idx);
+		vqv[j].itr_idx = cpu_to_le32(itr_idx);
+		j++;
 	}
 
 	return idpf_send_chunked_msg(qs->vport, &params);

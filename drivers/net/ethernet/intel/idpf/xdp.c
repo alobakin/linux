@@ -464,13 +464,8 @@ idpf_xdp_setup_prog(struct idpf_vport *vport, const struct netdev_bpf *xdp)
 	int ret;
 
 	cfg = vport->adapter->vport_config[vport->idx];
-	if (!vport->num_xdp_txq && vport->num_txq == cfg->max_q.max_txq) {
-		NL_SET_ERR_MSG_MOD(xdp->extack,
-				   "No Tx queues available for XDP, please decrease the number of regular SQs");
-		return -ENOSPC;
-	}
-
 	if (test_bit(IDPF_REMOVE_IN_PROG, vport->adapter->flags) ||
+	    !test_bit(IDPF_VPORT_REG_NETDEV, cfg->flags) ||
 	    !!vport->xdp_prog == !!prog) {
 		if (np->state == __IDPF_VPORT_UP)
 			idpf_xdp_copy_prog_to_rqs(vport, prog);
@@ -482,6 +477,12 @@ idpf_xdp_setup_prog(struct idpf_vport *vport, const struct netdev_bpf *xdp)
 		cfg->user_config.xdp_prog = prog;
 
 		return 0;
+	}
+
+	if (!vport->num_xdp_txq && vport->num_txq == cfg->max_q.max_txq) {
+		NL_SET_ERR_MSG_MOD(xdp->extack,
+				   "No Tx queues available for XDP, please decrease the number of regular SQs");
+		return -ENOSPC;
 	}
 
 	old = cfg->user_config.xdp_prog;

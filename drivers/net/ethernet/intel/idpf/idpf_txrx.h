@@ -744,6 +744,7 @@ libeth_cacheline_set_assert(struct idpf_tx_queue, 64,
  * @q_id: Queue id
  * @size: Length of descriptor ring in bytes
  * @dma: Physical address of ring
+ * @rxq_idx: stack index of the corresponding Rx queue
  * @q_vector: Backreference to associated vector
  * @rx_buffer_low_watermark: RX buffer low watermark
  * @rx_hbuf_size: Header buffer size
@@ -788,6 +789,7 @@ struct idpf_buf_queue {
 	dma_addr_t dma;
 
 	struct idpf_q_vector *q_vector;
+	u16 rxq_ixd;
 
 	u16 rx_buffer_low_watermark;
 	u16 rx_hbuf_size;

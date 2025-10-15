@@ -557,6 +557,7 @@ static int idpf_rx_hdr_buf_alloc_all(struct idpf_buf_queue *bufq)
 		.type	= LIBETH_FQE_HDR,
 		.xdp	= idpf_xdp_enabled(bufq->q_vector->vport),
 		.nid	= idpf_q_vector_to_mem(bufq->q_vector),
+		.idx	= bufq->rxq_ixd,
 	};
 	int ret;
 
@@ -698,6 +699,7 @@ static int idpf_rx_bufs_init_singleq(struct idpf_rx_queue *rxq)
 		.count	= rxq->desc_count,
 		.type	= LIBETH_FQE_MTU,
 		.nid	= idpf_q_vector_to_mem(rxq->q_vector),
+		.idx	= rxq->idx,
 	};
 	int ret;
 
@@ -757,6 +759,7 @@ static int idpf_rx_bufs_init(struct idpf_buf_queue *bufq,
 		.hsplit		= idpf_queue_has(HSPLIT_EN, bufq),
 		.xdp		= idpf_xdp_enabled(bufq->q_vector->vport),
 		.nid		= idpf_q_vector_to_mem(bufq->q_vector),
+		.idx		= bufq->rxq_ixd,
 	};
 	int ret;
 
@@ -1899,6 +1902,16 @@ setup_rxq:
 			q->rx_max_pkt_size = vport->netdev->mtu +
 							LIBETH_RX_LL_LEN;
 			idpf_rxq_set_descids(vport, q);
+		}
+
+		if (!idpf_is_queue_model_split(vport->rxq_model))
+			continue;
+
+		for (j = 0; j < vport->num_bufqs_per_qgrp; j++) {
+			struct idpf_buf_queue *bufq;
+
+			bufq = &rx_qgrp->splitq.bufq_sets[j].bufq;
+			bufq->rxq_ixd = rx_qgrp->splitq.rxq_sets[0]->rxq.idx;
 		}
 	}
 

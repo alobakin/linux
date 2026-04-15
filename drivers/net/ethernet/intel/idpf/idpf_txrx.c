@@ -179,10 +179,11 @@ static int idpf_tx_buf_alloc_all(struct idpf_tx_queue *tx_q)
 	/* Allocate book keeping buffers only. Buffers to be supplied to HW
 	 * are allocated by kernel network stack and received as part of skb
 	 */
-	if (idpf_queue_has(FLOW_SCH_EN, tx_q))
+	if (idpf_queue_has(FLOW_SCH_EN, tx_q) && !idpf_queue_has(XDP, tx_q))
 		tx_q->buf_pool_size = U16_MAX;
 	else
 		tx_q->buf_pool_size = tx_q->desc_count;
+
 	tx_q->tx_buf = kzalloc_objs(*tx_q->tx_buf, tx_q->buf_pool_size);
 	if (!tx_q->tx_buf)
 		return -ENOMEM;
@@ -227,7 +228,7 @@ static int idpf_tx_desc_alloc(const struct idpf_vport *vport,
 
 	idpf_xsk_setup_queue(vport, tx_q, VIRTCHNL2_QUEUE_TYPE_TX);
 
-	if (!idpf_queue_has(FLOW_SCH_EN, tx_q))
+	if (!idpf_queue_has(FLOW_SCH_EN, tx_q) || idpf_queue_has(XDP, tx_q))
 		return 0;
 
 	refillq = tx_q->refillq;
@@ -1057,6 +1058,13 @@ static void idpf_clean_queue_set(const struct idpf_queue_set *qs)
 			if (idpf_queue_has(XDP, q->txq)) {
 				q->txq->pending = 0;
 				q->txq->xdp_tx = 0;
+
+				if (static_branch_unlikely(&idpf_xdp_fb) &&
+				    idpf_queue_has(FLOW_SCH_EN, q->txq)) {
+					bitmap_zero(q->txq->pending_mask,
+						    q->txq->desc_count);
+					q->txq->curr_tag = U32_MAX;
+				}
 			} else {
 				q->txq->txq_grp->num_completions_pending = 0;
 			}
@@ -1319,7 +1327,8 @@ static void idpf_txq_group_rel(struct idpf_q_vec_rsrc *rsrc)
 			if (!txq_grp->txqs[j])
 				continue;
 
-			if (idpf_queue_has(FLOW_SCH_EN, txq_grp->txqs[j])) {
+			if (idpf_queue_has(FLOW_SCH_EN, txq_grp->txqs[j]) &&
+			    !idpf_queue_has(XDP, txq_grp->txqs[j])) {
 				kfree(txq_grp->txqs[j]->refillq);
 				txq_grp->txqs[j]->refillq = NULL;
 			}
@@ -1456,7 +1465,7 @@ static int idpf_vport_init_fast_path_txqs(struct idpf_vport *vport,
 			vport->txqs[k] = tx_grp->txqs[j];
 			vport->txqs[k]->idx = k;
 
-			if (!caps)
+			if (!caps || idpf_queue_has(XDP, vport->txqs[k]))
 				continue;
 
 			vport->txqs[k]->cached_tstamp_caps = caps;

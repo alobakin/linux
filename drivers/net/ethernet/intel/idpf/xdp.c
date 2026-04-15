@@ -7,6 +7,8 @@
 #include "xdp.h"
 #include "xsk.h"
 
+DEFINE_STATIC_KEY_FALSE(idpf_xdp_fb);
+
 static int idpf_rxq_for_each(const struct idpf_q_vec_rsrc *rsrc,
 			     int (*fn)(struct idpf_rx_queue *rxq, void *arg),
 			     void *arg)
@@ -151,8 +153,10 @@ static void idpf_xdp_tx_timer(struct work_struct *work);
 
 int idpf_xdpsqs_get(const struct idpf_vport *vport)
 {
-	struct libeth_xdpsq_timer **timers __free(kvfree) = NULL;
-	struct net_device *dev;
+	struct libeth_xdpsq_timer **timers;
+	const struct net_device *dev;
+	unsigned long **masks;
+	bool fb, warn;
 	u32 sqs;
 
 	if (!idpf_xdp_enabled(vport))
@@ -169,13 +173,42 @@ int idpf_xdpsqs_get(const struct idpf_vport *vport)
 			for (int j = i - 1; j >= 0; j--)
 				kfree(timers[j]);
 
-			return -ENOMEM;
+			goto err_timers;
 		}
 	}
 
 	dev = vport->netdev;
 	sqs = vport->dflt_qv_rsrc.xdp_txq_offset;
 
+	fb = !idpf_is_cap_ena(vport->adapter, IDPF_OTHER_CAPS,
+			      VIRTCHNL2_CAP_SPLITQ_QSCHED);
+	if (!fb)
+		goto setup;
+
+	masks = kvzalloc_objs(*masks, vport->num_xdp_txq);
+	if (!masks)
+		goto err_masks;
+
+	for (u32 i = 0; i < vport->num_xdp_txq; i++) {
+		masks[i] = bitmap_zalloc_node(vport->txqs[sqs + i]->desc_count,
+					      GFP_KERNEL, cpu_to_mem(i));
+		if (!masks[i]) {
+			for (int j = i - 1; j >= 0; j--)
+				bitmap_free(masks[j]);
+
+			kvfree(masks);
+			goto err_masks;
+		}
+	}
+
+	warn = !static_key_enabled(&idpf_xdp_fb);
+	static_branch_inc(&idpf_xdp_fb);
+
+	if (warn && net_ratelimit())
+		netdev_warn(dev,
+			    "The FW doesn't support Tx in FIFO mode, XDP Tx performance might be suboptimal\n");
+
+setup:
 	for (u32 i = sqs; i < vport->num_txq; i++) {
 		struct idpf_tx_queue *xdpsq = vport->txqs[i];
 
@@ -183,8 +216,8 @@ int idpf_xdpsqs_get(const struct idpf_vport *vport)
 		kfree(xdpsq->refillq);
 		xdpsq->refillq = NULL;
 
-		idpf_queue_clear(FLOW_SCH_EN, xdpsq);
-		idpf_queue_clear(FLOW_SCH_EN, xdpsq->complq);
+		idpf_queue_assign(FLOW_SCH_EN, xdpsq, fb);
+		idpf_queue_assign(FLOW_SCH_EN, xdpsq->complq, fb);
 		idpf_queue_set(NOIRQ, xdpsq);
 		idpf_queue_set(XDP, xdpsq);
 		idpf_queue_set(XDP, xdpsq->complq);
@@ -197,14 +230,29 @@ int idpf_xdpsqs_get(const struct idpf_vport *vport)
 		xdpsq->pending = 0;
 		xdpsq->xdp_tx = 0;
 		xdpsq->thresh = libeth_xdp_queue_threshold(xdpsq->desc_count);
+
+		if (static_branch_unlikely(&idpf_xdp_fb) && fb) {
+			xdpsq->pending_mask = masks[i - sqs];
+			xdpsq->curr_tag = U32_MAX;
+		}
 	}
 
 	return 0;
+
+err_masks:
+	for (u32 i = 0; i < vport->num_xdp_txq; i++)
+		kfree(timers[i]);
+
+err_timers:
+	kvfree(timers);
+
+	return -ENOMEM;
 }
 
 void idpf_xdpsqs_put(const struct idpf_vport *vport)
 {
 	struct net_device *dev;
+	bool fb;
 	u32 sqs;
 
 	if (!idpf_xdp_enabled(vport))
@@ -222,10 +270,22 @@ void idpf_xdpsqs_put(const struct idpf_vport *vport)
 		libeth_xdpsq_deinit_timer(xdpsq->timer);
 		libeth_xdpsq_put(&xdpsq->xdp_lock, dev);
 
+		if (static_branch_unlikely(&idpf_xdp_fb) &&
+		    idpf_queue_has(FLOW_SCH_EN, xdpsq)) {
+			bitmap_free(xdpsq->pending_mask);
+			xdpsq->pending_mask = NULL;
+			xdpsq->curr_tag = 0;
+
+			fb = true;
+		}
+
 		kfree(xdpsq->timer);
 		xdpsq->refillq = NULL;
 		idpf_queue_clear(NOIRQ, xdpsq);
 	}
+
+	if (fb)
+		static_branch_dec(&idpf_xdp_fb);
 }
 
 static int idpf_xdp_parse_cqe(const struct idpf_splitq_4b_tx_compl_desc *desc,
@@ -250,6 +310,65 @@ static int idpf_xdp_parse_cqe(const struct idpf_splitq_4b_tx_compl_desc *desc,
 	return upper_16_bits(val);
 }
 
+static u32 idpf_xdpsq_poll_fb(struct idpf_tx_queue *xdpsq, u32 budget)
+{
+	struct idpf_compl_queue *cq = xdpsq->complq;
+	unsigned long *mask = xdpsq->pending_mask;
+	u32 done_frames, tx_cnt, new_ntc;
+	u32 ntc = cq->next_to_clean;
+	u32 cnt = cq->desc_count;
+	bool gen;
+
+	gen = idpf_queue_has(GEN_CHK, cq);
+
+	for (done_frames = 0; done_frames < budget; ) {
+		int ret;
+
+		ret = idpf_xdp_parse_cqe(&cq->comp[ntc].common, gen);
+		if (ret >= 0) {
+			__clear_bit(ret, mask);
+			done_frames++;
+
+			goto next;
+		}
+
+		switch (ret) {
+		case -ENODATA:
+			goto out;
+		case -EINVAL:
+			break;
+		}
+
+next:
+		if (unlikely(++ntc == cnt)) {
+			ntc = 0;
+			gen = !gen;
+			idpf_queue_change(GEN_CHK, cq);
+		}
+	}
+
+out:
+	cq->next_to_clean = ntc;
+
+	if (unlikely(!done_frames))
+		return 0;
+
+	tx_cnt = xdpsq->desc_count;
+
+	/* Don't go past next_to_use */
+	__set_bit(xdpsq->next_to_use, mask);
+
+	new_ntc = find_next_bit(mask, tx_cnt, xdpsq->next_to_clean);
+	done_frames = new_ntc - xdpsq->next_to_clean;
+
+	if (new_ntc == tx_cnt)
+		done_frames += find_first_bit(mask, tx_cnt);
+
+	__clear_bit(xdpsq->next_to_use, mask);
+
+	return done_frames;
+}
+
 u32 idpf_xdpsq_poll(struct idpf_tx_queue *xdpsq, u32 budget)
 {
 	struct idpf_compl_queue *cq = xdpsq->complq;
@@ -259,6 +378,10 @@ u32 idpf_xdpsq_poll(struct idpf_tx_queue *xdpsq, u32 budget)
 	u32 cnt = cq->desc_count;
 	u32 done_frames;
 	bool gen;
+
+	if (static_branch_unlikely(&idpf_xdp_fb) &&
+	    idpf_queue_has(FLOW_SCH_EN, xdpsq))
+		return idpf_xdpsq_poll_fb(xdpsq, budget);
 
 	gen = idpf_queue_has(GEN_CHK, cq);
 

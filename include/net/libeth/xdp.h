@@ -409,6 +409,7 @@ struct libeth_xdp_tx_bulk {
  * @descs: opaque pointer to the HW descriptor array
  * @ntu: pointer to the next free descriptor index
  * @count: number of descriptors on that queue
+ * @priv: scratch space for driver-specific data
  * @pending: pointer to the number of sent-not-completed descs on that queue
  * @xdp_tx: pointer to the above, but only for non-XSk-xmit frames
  * @lock: corresponding XDPSQ lock
@@ -424,6 +425,7 @@ struct libeth_xdpsq {
 
 	u32				*ntu;
 	u32				count;
+	u32				priv;
 
 	u32				*pending;
 	u32				*xdp_tx;

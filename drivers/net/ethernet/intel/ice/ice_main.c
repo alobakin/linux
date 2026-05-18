@@ -6019,17 +6019,15 @@ err_update_filters:
 	return 0;
 }
 
-/**
- * ice_set_rx_mode - NDO callback to set the netdev filters
- * @netdev: network interface device structure
- */
-static void ice_set_rx_mode(struct net_device *netdev)
+static int ice_set_rx_mode_async(struct net_device *netdev,
+				 struct netdev_hw_addr_list *uc,
+				 struct netdev_hw_addr_list *mc)
 {
 	struct ice_netdev_priv *np = netdev_priv(netdev);
 	struct ice_vsi *vsi = np->vsi;
 
 	if (!vsi || ice_is_switchdev_running(vsi->back))
-		return;
+		return 0;
 
 	/* Set the flags to synchronize filters
 	 * ndo_set_rx_mode may be triggered even without a change in netdev
@@ -6043,6 +6041,8 @@ static void ice_set_rx_mode(struct net_device *netdev)
 	 * applying the new filter changes
 	 */
 	ice_service_task_schedule(vsi->back);
+
+	return 0;
 }
 
 /**
@@ -6555,7 +6555,7 @@ int ice_vsi_cfg_lan(struct ice_vsi *vsi)
 	int err;
 
 	if (vsi->netdev && vsi->type == ICE_VSI_PF) {
-		ice_set_rx_mode(vsi->netdev);
+		ice_set_rx_mode_async(vsi->netdev, NULL, NULL);
 
 		err = ice_vsi_vlan_setup(vsi);
 		if (err)
@@ -9791,7 +9791,7 @@ static const struct net_device_ops ice_netdev_ops = {
 	.ndo_select_queue = ice_select_queue,
 	.ndo_features_check = ice_features_check,
 	.ndo_fix_features = ice_fix_features,
-	.ndo_set_rx_mode = ice_set_rx_mode,
+	.ndo_set_rx_mode_async = ice_set_rx_mode_async,
 	.ndo_set_mac_address = ice_set_mac_address,
 	.ndo_validate_addr = eth_validate_addr,
 	.ndo_change_mtu = ice_change_mtu,

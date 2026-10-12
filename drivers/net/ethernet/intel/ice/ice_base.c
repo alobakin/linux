@@ -1193,12 +1193,12 @@ int ice_vsi_cfg_xdp_txqs(struct ice_vsi *vsi)
 	int ret;
 	int i;
 
+	ice_for_each_rxq(vsi, i)
+		ice_tx_xsk_pool(vsi, i);
+
 	ret = ice_vsi_cfg_txqs(vsi, vsi->xdp_rings, vsi->num_xdp_txq);
 	if (ret)
 		return ret;
-
-	ice_for_each_rxq(vsi, i)
-		ice_tx_xsk_pool(vsi, i);
 
 	return 0;
 }
@@ -1499,13 +1499,15 @@ int ice_qp_ena(struct ice_vsi *vsi, u16 q_idx)
 	if (ice_is_xdp_ena_vsi(vsi)) {
 		struct ice_tx_ring *xdp_ring = vsi->rx_rings[q_idx]->xdp_ring;
 
+		ice_tx_xsk_pool(vsi, q_idx);
+
 		err = ice_vsi_cfg_single_txq(vsi, vsi->xdp_rings,
 					     xdp_ring->q_index -
 					     vsi->xdp_rings[0]->q_index);
 		if (!fail)
 			fail = err;
+
 		ice_set_ring_xdp(xdp_ring);
-		ice_tx_xsk_pool(vsi, q_idx);
 	}
 
 	err = ice_vsi_cfg_single_rxq(vsi, q_idx);

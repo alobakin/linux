@@ -699,6 +699,53 @@ construct_skb:
 	return failure ? budget : (int)total_rx_packets;
 }
 
+struct ice_xsk_xmit_ctx {
+	struct ice_tx_ring *xdp_ring;
+
+	u32 xdp_ntu;
+	u32 xdp_cnt;
+
+	struct ice_tstamp_ring *ts_ring;
+
+	u32 ts_ntu;
+	u32 ts_cnt;
+} __aligned_largest;
+
+static void ice_xsk_tmo_request_launch_time(u64 launch_time, void *priv)
+{
+	struct ice_xsk_xmit_ctx *xctx = (struct ice_xsk_xmit_ctx *)priv;
+	u32 tstamp, fetch;
+	__le32 desc;
+
+	if (!xctx->ts_ring)
+		return;
+
+	div_u64_rem(launch_time, NSEC_PER_SEC, &tstamp);
+	tstamp = DIV_ROUND_CLOSEST(tstamp,
+				   BIT(ICE_TXTIME_CTX_RESOLUTION_128NS));
+
+	desc = ice_build_tstamp_desc(xctx->xdp_ntu + 1, tstamp);
+	ICE_TS_DESC(xctx->ts_ring, xctx->ts_ntu)->tx_desc_idx_tstamp = desc;
+
+	xctx->ts_ntu++;
+	xctx->ts_cnt++;
+
+	if (likely(xctx->ts_ntu != xctx->ts_ring->count))
+		return;
+
+	/* See the bottom comment in ice_tx_map() */
+	fetch = xctx->ts_ring->count - xctx->xdp_ring->count;
+
+	for (xctx->ts_ntu = 0; xctx->ts_ntu < fetch; xctx->ts_ntu++)
+		ICE_TS_DESC(xctx->ts_ring, xctx->ts_ntu)->tx_desc_idx_tstamp =
+			desc;
+}
+
+static const struct xsk_tx_metadata_ops ice_xsk_tx_md = {
+	.tmo_request_launch_time	= ice_xsk_tmo_request_launch_time,
+};
+const struct xsk_tx_metadata_ops *ice_xsk_tx_md_slow = &ice_xsk_tx_md;
+
 /**
  * ice_xmit_pkt - produce a single HW Tx descriptor out of AF_XDP descriptor
  * @xdp_ring: XDP ring to produce the HW Tx descriptor on
@@ -706,22 +753,27 @@ construct_skb:
  * @desc: AF_XDP descriptor to pull the DMA address and length from
  * @total_bytes: bytes accumulator that will be used for stats update
  */
-static void ice_xmit_pkt(struct ice_tx_ring *xdp_ring,
-			 struct xsk_buff_pool *xsk_pool, struct xdp_desc *desc,
-			 unsigned int *total_bytes)
+static u64 ice_xmit_pkt(struct ice_xsk_xmit_ctx *xctx,
+			 struct xsk_buff_pool *xsk_pool,
+			 const struct xdp_desc *desc)
 {
 	struct ice_tx_desc *tx_desc;
-	dma_addr_t dma;
+	struct xdp_desc_ctx ctx;
 
-	dma = xsk_buff_raw_get_dma(xsk_pool, desc->addr);
-	xsk_buff_raw_dma_sync_for_device(xsk_pool, dma, desc->len);
+	ctx = xsk_buff_raw_get_ctx(xsk_pool, desc->addr, desc->options);
+	xsk_buff_raw_dma_sync_for_device(xsk_pool, ctx.dma, desc->len);
 
-	tx_desc = ICE_TX_DESC(xdp_ring, xdp_ring->next_to_use++);
-	tx_desc->buf_addr = cpu_to_le64(dma);
+	tx_desc = ICE_TX_DESC(xctx->xdp_ring, xctx->xdp_ntu);
+	tx_desc->buf_addr = cpu_to_le64(ctx.dma);
 	tx_desc->cmd_type_offset_bsz = ice_build_ctob(xsk_is_eop_desc(desc),
 						      0, desc->len, 0);
 
-	*total_bytes += desc->len;
+	xsk_tx_metadata_request(xsk_pool, &ctx.meta, &ice_xsk_tx_md, xctx);
+
+	xctx->xdp_ntu++;
+	xctx->xdp_cnt++;
+
+	return desc->len;
 }
 
 /**
@@ -731,31 +783,37 @@ static void ice_xmit_pkt(struct ice_tx_ring *xdp_ring,
  * @descs: AF_XDP descriptors to pull the DMA addresses and lengths from
  * @total_bytes: bytes accumulator that will be used for stats update
  */
-static void ice_xmit_pkt_batch(struct ice_tx_ring *xdp_ring,
+static u64 ice_xmit_pkt_batch(struct ice_xsk_xmit_ctx *xctx,
 			       struct xsk_buff_pool *xsk_pool,
-			       struct xdp_desc *descs,
-			       unsigned int *total_bytes)
+			       struct xdp_desc *descs)
 {
-	u16 ntu = xdp_ring->next_to_use;
 	struct ice_tx_desc *tx_desc;
+	u64 ret = 0;
 	u32 i;
 
 	unrolled_count(PKTS_PER_BATCH)
 	for (i = 0; i < PKTS_PER_BATCH; i++) {
-		dma_addr_t dma;
+		const struct xdp_desc *desc = &descs[i];
+		struct xdp_desc_ctx ctx;
 
-		dma = xsk_buff_raw_get_dma(xsk_pool, descs[i].addr);
-		xsk_buff_raw_dma_sync_for_device(xsk_pool, dma, descs[i].len);
+		ctx = xsk_buff_raw_get_ctx(xsk_pool, desc->addr, desc->options);
+		xsk_buff_raw_dma_sync_for_device(xsk_pool, ctx.dma, desc->len);
 
-		tx_desc = ICE_TX_DESC(xdp_ring, ntu++);
-		tx_desc->buf_addr = cpu_to_le64(dma);
-		tx_desc->cmd_type_offset_bsz = ice_build_ctob(xsk_is_eop_desc(&descs[i]),
-							      0, descs[i].len, 0);
+		tx_desc = ICE_TX_DESC(xctx->xdp_ring, xctx->xdp_ntu);
+		tx_desc->buf_addr = cpu_to_le64(ctx.dma);
+		tx_desc->cmd_type_offset_bsz =
+			ice_build_ctob(xsk_is_eop_desc(desc), 0, desc->len, 0);
 
-		*total_bytes += descs[i].len;
+		xsk_tx_metadata_request(xsk_pool, &ctx.meta, &ice_xsk_tx_md,
+					xctx);
+
+		xctx->xdp_ntu++;
+		ret += desc->len;
 	}
 
-	xdp_ring->next_to_use = ntu;
+	xctx->xdp_cnt += PKTS_PER_BATCH;
+
+	return ret;
 }
 
 /**
@@ -766,19 +824,22 @@ static void ice_xmit_pkt_batch(struct ice_tx_ring *xdp_ring,
  * @nb_pkts: count of packets to be send
  * @total_bytes: bytes accumulator that will be used for stats update
  */
-static void ice_fill_tx_hw_ring(struct ice_tx_ring *xdp_ring,
+static u64 ice_fill_tx_hw_ring(struct ice_xsk_xmit_ctx *xctx,
 				struct xsk_buff_pool *xsk_pool,
-				struct xdp_desc *descs, u32 nb_pkts,
-				unsigned int *total_bytes)
+				struct xdp_desc *descs, u32 nb_pkts)
 {
 	u32 batched, leftover, i;
+	u64 ret = 0;
 
 	batched = ALIGN_DOWN(nb_pkts, PKTS_PER_BATCH);
 	leftover = nb_pkts & (PKTS_PER_BATCH - 1);
+
 	for (i = 0; i < batched; i += PKTS_PER_BATCH)
-		ice_xmit_pkt_batch(xdp_ring, xsk_pool, &descs[i], total_bytes);
+		ret += ice_xmit_pkt_batch(xctx, xsk_pool, &descs[i]);
 	for (; i < batched + leftover; i++)
-		ice_xmit_pkt(xdp_ring, xsk_pool, &descs[i], total_bytes);
+		ret += ice_xmit_pkt(xctx, xsk_pool, &descs[i]);
+
+	return ret;
 }
 
 /**
@@ -790,10 +851,11 @@ static void ice_fill_tx_hw_ring(struct ice_tx_ring *xdp_ring,
  */
 bool ice_xmit_zc(struct ice_tx_ring *xdp_ring, struct xsk_buff_pool *xsk_pool)
 {
-	struct xdp_desc *descs = xsk_pool->tx_descs;
 	u32 nb_pkts, nb_processed = 0;
-	unsigned int total_bytes = 0;
-	int budget;
+	struct ice_xsk_xmit_ctx xctx;
+	struct xdp_desc *descs;
+	u64 total_bytes;
+	u32 budget;
 
 	ice_clean_xdp_irq_zc(xdp_ring, xsk_pool);
 
@@ -808,18 +870,43 @@ bool ice_xmit_zc(struct ice_tx_ring *xdp_ring, struct xsk_buff_pool *xsk_pool)
 	if (!nb_pkts)
 		return true;
 
-	if (xdp_ring->next_to_use + nb_pkts >= xdp_ring->count) {
-		nb_processed = xdp_ring->count - xdp_ring->next_to_use;
-		ice_fill_tx_hw_ring(xdp_ring, xsk_pool, descs, nb_processed,
-				    &total_bytes);
-		xdp_ring->next_to_use = 0;
+	descs = xsk_pool->tx_descs;
+	total_bytes = 0;
+
+	xctx = (struct ice_xsk_xmit_ctx){
+		.xdp_ring		= xdp_ring,
+		.xdp_ntu		= xdp_ring->next_to_use,
+	};
+
+	if (ice_is_txtime_cfg(xdp_ring)) {
+		xctx.ts_ring = xdp_ring->tstamp_ring;
+		xctx.ts_ntu = xctx.ts_ring->next_to_use;
 	}
 
-	ice_fill_tx_hw_ring(xdp_ring, xsk_pool, &descs[nb_processed],
-			    nb_pkts - nb_processed, &total_bytes);
+	if (xctx.xdp_ntu + nb_pkts >= xdp_ring->count) {
+		nb_processed = xdp_ring->count - xctx.xdp_ntu;
+		total_bytes += ice_fill_tx_hw_ring(&xctx, xsk_pool, descs,
+						   nb_processed);
+		xctx.xdp_ntu = 0;
+	}
+
+	total_bytes += ice_fill_tx_hw_ring(&xctx, xsk_pool,
+					   &descs[nb_processed],
+					   nb_pkts - nb_processed);
+
+	xdp_ring->next_to_use = xctx.xdp_ntu;
+	if (xctx.ts_ring)
+		xctx.ts_ring->next_to_use = xctx.ts_ntu;
 
 	ice_set_rs_bit(xdp_ring);
-	ice_xdp_ring_update_tail(xdp_ring);
+	dma_wmb();
+
+	if (xctx.ts_cnt)
+		writel_relaxed(xctx.ts_ntu, xctx.ts_ring->tail);
+
+	if (xctx.xdp_cnt != xctx.ts_cnt)
+		writel_relaxed(xctx.xdp_ntu, xdp_ring->tail);
+
 	ice_update_tx_ring_stats(xdp_ring, nb_pkts, total_bytes);
 
 	if (xsk_uses_need_wakeup(xsk_pool))

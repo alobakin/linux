@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0
 /* Copyright (c) 2024, Intel Corporation. */
+
+#include <net/libeth/xdp.h>
+
 #include "ice.h"
 #include "ice_lib.h"
 #include "ice_txrx.h"
@@ -49,11 +52,8 @@ static int ice_sf_cfg_netdev(struct ice_dynamic_port *dyn_port,
 	np->vsi = vsi;
 
 	ice_set_netdev_features(netdev);
-
-	netdev->xdp_features = NETDEV_XDP_ACT_BASIC | NETDEV_XDP_ACT_REDIRECT |
-			       NETDEV_XDP_ACT_XSK_ZEROCOPY |
-			       NETDEV_XDP_ACT_RX_SG;
-	netdev->xdp_zc_max_segs = ICE_MAX_BUF_TXD;
+	libeth_xdp_set_features_noredir(netdev, &ice_xdp_md_ops,
+					ICE_MAX_BUF_TXD, ice_xsk_tx_md_slow);
 
 	eth_hw_addr_set(netdev, dyn_port->hw_addr);
 	ether_addr_copy(netdev->perm_addr, dyn_port->hw_addr);

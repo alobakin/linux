@@ -689,6 +689,8 @@ struct ice_netdev_priv {
 	struct list_head tc_indr_block_priv_list;
 };
 
+bool ice_is_feature_supported(struct ice_pf *pf, enum ice_feature f);
+
 /**
  * ice_vector_ch_enabled
  * @qv: pointer to q_vector, can be NULL
@@ -836,13 +838,19 @@ static inline void ice_rx_xsk_pool(struct ice_rx_ring *ring)
  */
 static inline void ice_tx_xsk_pool(struct ice_vsi *vsi, u16 qid)
 {
+	struct xsk_buff_pool *pool;
 	struct ice_tx_ring *ring;
 
 	ring = vsi->rx_rings[qid]->xdp_ring;
 	if (!ring)
 		return;
 
-	WRITE_ONCE(ring->xsk_pool, ice_get_xp_from_qid(vsi, qid));
+	pool = ice_get_xp_from_qid(vsi, qid);
+	WRITE_ONCE(ring->xsk_pool, pool);
+
+	assign_bit(ring->q_index, vsi->back->txtime_txqs,
+		   pool && pool->tx_metadata_len &&
+		   ice_is_feature_supported(vsi->back, ICE_F_TXTIME));
 }
 
 /**

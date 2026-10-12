@@ -10,6 +10,8 @@
 struct ice_vsi;
 
 #ifdef CONFIG_XDP_SOCKETS
+extern const struct xsk_tx_metadata_ops *ice_xsk_tx_md_slow;
+
 int ice_xsk_pool_setup(struct ice_vsi *vsi, struct xsk_buff_pool *pool,
 		       u16 qid);
 int ice_clean_rx_irq_zc(struct ice_rx_ring *rx_ring,
@@ -31,6 +33,8 @@ void ice_qvec_ena_irq(struct ice_vsi *vsi, struct ice_q_vector *q_vector);
 void ice_qvec_dis_irq(struct ice_vsi *vsi, struct ice_rx_ring *rx_ring,
 		      struct ice_q_vector *q_vector);
 #else
+#define ice_xsk_tx_md_slow	NULL
+
 static inline bool ice_xmit_zc(struct ice_tx_ring __always_unused *xdp_ring,
 			       struct xsk_buff_pool __always_unused *xsk_pool)
 {

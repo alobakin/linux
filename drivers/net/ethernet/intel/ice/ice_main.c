@@ -7,6 +7,9 @@
 
 #include <generated/utsrelease.h>
 #include <linux/crash_dump.h>
+
+#include <net/libeth/xdp.h>
+
 #include "ice.h"
 #include "ice_base.h"
 #include "ice_lib.h"
@@ -3453,16 +3456,13 @@ static void ice_set_ops(struct ice_vsi *vsi)
 
 	netdev->netdev_ops = &ice_netdev_ops;
 	netdev->udp_tunnel_nic_info = &pf->hw.udp_tunnel_nic;
-	netdev->xdp_metadata_ops = &ice_xdp_md_ops;
 	ice_set_ethtool_ops(netdev);
 
 	if (vsi->type != ICE_VSI_PF)
 		return;
 
-	netdev->xdp_features = NETDEV_XDP_ACT_BASIC | NETDEV_XDP_ACT_REDIRECT |
-			       NETDEV_XDP_ACT_XSK_ZEROCOPY |
-			       NETDEV_XDP_ACT_RX_SG;
-	netdev->xdp_zc_max_segs = ICE_MAX_BUF_TXD;
+	libeth_xdp_set_features_noredir(netdev, &ice_xdp_md_ops,
+					ICE_MAX_BUF_TXD, ice_xsk_tx_md_slow);
 }
 
 /**

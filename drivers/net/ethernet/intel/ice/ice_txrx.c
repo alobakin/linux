@@ -229,14 +229,14 @@ tx_skip_free:
 	tx_ring->next_to_use = 0;
 	tx_ring->next_to_clean = 0;
 
+	if (ice_is_txtime_cfg(tx_ring))
+		ice_free_tx_tstamp_ring(tx_ring);
+
 	if (!tx_ring->netdev)
 		return;
 
 	/* cleanup Tx queue statistics */
 	netdev_tx_reset_queue(txring_txq(tx_ring));
-
-	if (ice_is_txtime_cfg(tx_ring))
-		ice_free_tx_tstamp_ring(tx_ring);
 }
 
 /**

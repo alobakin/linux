@@ -289,7 +289,7 @@ static u32 idpf_xsk_tx_prep(void *_xdpsq, struct libeth_xdpsq *sq)
 		.xdp_tx		= &xdpsq->xdp_tx,
 	};
 
-	return free;
+	return free - 1;
 }
 
 static u32 idpf_xsk_xmit_prep(void *_xdpsq, struct libeth_xdpsq *sq)

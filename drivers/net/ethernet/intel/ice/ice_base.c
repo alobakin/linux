@@ -1422,7 +1422,7 @@ static void ice_qp_clean_rings(struct ice_vsi *vsi, u16 q_idx)
 {
 	ice_clean_tx_ring(vsi->tx_rings[q_idx]);
 	if (vsi->xdp_rings)
-		ice_clean_tx_ring(vsi->xdp_rings[q_idx]);
+		ice_clean_tx_ring(vsi->rx_rings[q_idx]->xdp_ring);
 	ice_clean_rx_ring(vsi->rx_rings[q_idx]);
 }
 
@@ -1461,7 +1461,7 @@ int ice_qp_dis(struct ice_vsi *vsi, u16 q_idx)
 	if (!fail)
 		fail = err;
 	if (vsi->xdp_rings) {
-		struct ice_tx_ring *xdp_ring = vsi->xdp_rings[q_idx];
+		struct ice_tx_ring *xdp_ring = vsi->rx_rings[q_idx]->xdp_ring;
 
 		memset(&txq_meta, 0, sizeof(txq_meta));
 		ice_fill_txq_meta(vsi, xdp_ring, &txq_meta);
@@ -1497,9 +1497,11 @@ int ice_qp_ena(struct ice_vsi *vsi, u16 q_idx)
 		fail = err;
 
 	if (ice_is_xdp_ena_vsi(vsi)) {
-		struct ice_tx_ring *xdp_ring = vsi->xdp_rings[q_idx];
+		struct ice_tx_ring *xdp_ring = vsi->rx_rings[q_idx]->xdp_ring;
 
-		err = ice_vsi_cfg_single_txq(vsi, vsi->xdp_rings, q_idx);
+		err = ice_vsi_cfg_single_txq(vsi, vsi->xdp_rings,
+					     xdp_ring->q_index -
+					     vsi->xdp_rings[0]->q_index);
 		if (!fail)
 			fail = err;
 		ice_set_ring_xdp(xdp_ring);

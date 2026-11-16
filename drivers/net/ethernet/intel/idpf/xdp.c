@@ -236,8 +236,7 @@ static int idpf_xdp_parse_cqe(const struct idpf_splitq_4b_tx_compl_desc *desc,
 #ifdef __LIBETH_WORD_ACCESS
 	val = *(const u32 *)desc;
 #else
-	val = ((u32)le16_to_cpu(desc->q_head_compl_tag.q_head) << 16) |
-	      le16_to_cpu(desc->qid_comptype_gen);
+	val = le16_to_cpu(desc->qid_comptype_gen);
 #endif
 	if (!!(val & IDPF_TXD_COMPLQ_GEN_M) != gen)
 		return -ENODATA;
@@ -247,7 +246,13 @@ static int idpf_xdp_parse_cqe(const struct idpf_splitq_4b_tx_compl_desc *desc,
 				IDPF_TXD_COMPLT_RS)))
 		return -EINVAL;
 
+#ifdef __LIBETH_WORD_ACCESS
 	return upper_16_bits(val);
+#else
+	dma_rmb();
+
+	return le16_to_cpu(desc->q_head_compl_tag.q_head);
+#endif
 }
 
 u32 idpf_xdpsq_poll(struct idpf_tx_queue *xdpsq, u32 budget)

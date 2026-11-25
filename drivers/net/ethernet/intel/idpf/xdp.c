@@ -164,7 +164,7 @@ int idpf_xdpsqs_get(const struct idpf_vport *vport)
 
 	for (u32 i = 0; i < vport->num_xdp_txq; i++) {
 		timers[i] = kzalloc_node(sizeof(*timers[i]), GFP_KERNEL,
-					 cpu_to_mem(i));
+					 cpu_to_mem(i % nr_cpu_ids));
 		if (!timers[i]) {
 			for (int j = i - 1; j >= 0; j--)
 				kfree(timers[j]);
